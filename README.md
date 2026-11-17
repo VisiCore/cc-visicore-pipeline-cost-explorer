@@ -14,7 +14,8 @@ Pipeline Cost Explorer is a Cribl app for pipeline performance review. It helps 
   * **Measured timings** per function, taken by running live-captured events or a saved sample through the pipeline with Cribl's pipeline preview and CPU profiling.
   * **CPU time estimates** that combine measured time per event with each pipeline's actual event throughput over the last 1 hour to 7 days.
   * **Discarded output detection**: finds pipelines whose output is dropped or sent to a DevNull Destination downstream.
-  * **Worker load check**: compares estimated pipeline cost with the load the Workers report.
+  * **Recommendations**: a ranked list of what to change, with the CPU time at stake, including functions that would save work if moved earlier.
+  * **Check against Worker CPU**: compares estimated pipeline cost with the CPU the Workers' Cribl processes report.
   * **Test a change**: edit a pipeline's functions inside the app and measure the edited version against the saved one on the same events, with a check that the output is still the same. Nothing is saved to Cribl.
   * Covers pipelines inside Packs as well as the group's own pipelines.
 * Intended users: Cribl admins and pipeline authors.
@@ -47,6 +48,7 @@ The app is read-only with respect to your configuration. It requests:
 | `/m/*/system/capture` | POST | Capture live events for up to 10 seconds as profiling input. Read-only; captured events are not stored. |
 | `/m/*/preview` | POST | Run sample events through a pipeline to time each function. Nothing is sent to Destinations. |
 | `/system/metrics/query` | POST | Read per-pipeline event counts |
+| `/w/*/system/metrics/query`, `/m/*/system/metrics/query` | POST | Ask each Worker for the CPU its Cribl processes use |
 
 It makes no external network calls.
 

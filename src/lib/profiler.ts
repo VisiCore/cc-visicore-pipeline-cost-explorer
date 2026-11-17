@@ -28,6 +28,10 @@ const COMPARE_ROUNDS = 3;
  * only ever measured with distinct events.
  */
 const STATEFUL = new Set([
+  // A Chain runs another pipeline, which may itself keep state, and a Code function can keep anything
+  // between events, so both are treated as if they do.
+  'chain',
+  'code',
   'aggregation',
   'aggregate_metrics',
   'rollup_metrics',
@@ -133,16 +137,26 @@ export async function gatherEvents(
   };
 }
 
-/** Keeps the faster measurement of each function across two runs of the same configuration. */
+const totalOf = (stats: PreviewStats) => stats.functions.reduce((sum, f) => sum + f.duration, 0);
+
+/**
+ * Keeps whichever run of the same configuration was faster overall. The whole run is kept, not the
+ * best time of each function, so the function times shown always add up to a run that happened.
+ */
 function fastest(a: PreviewStats | undefined, b: PreviewStats): PreviewStats {
-  if (!a) return b;
-  return {
-    duration: Math.min(a.duration, b.duration),
-    functions: b.functions.map((f, i) => (f.duration < a.functions[i].duration ? f : a.functions[i])),
-  };
+  return !a || totalOf(b) < totalOf(a) ? b : a;
 }
 
-function toProfile(pipeline: Pipeline, stats: PreviewStats, gathered: GatheredEvents): PipelineProfile {
+/** Gap between the two smallest values: how repeatable the smallest one is. */
+function gap(values: number[]): number | undefined {
+  if (values.length < 2) return undefined;
+  const [min, next] = [...values].sort((x, y) => x - y);
+  return next - min;
+}
+
+/** Summarizes several runs of one configuration: the fastest whole run, with how repeatable it was. */
+function toProfile(pipeline: Pipeline, runs: PreviewStats[], gathered: GatheredEvents): PipelineProfile {
+  const stats = runs.reduce<PreviewStats | undefined>(fastest, undefined)!;
   const indexes = align(pipeline, stats);
   const functions: FnProfile[] = stats.functions.map((f, i) => ({
     index: indexes[i],
@@ -151,7 +165,11 @@ function toProfile(pipeline: Pipeline, stats: PreviewStats, gathered: GatheredEv
     eventsOut: f.eventsOut,
     bytesIn: f.bytesIn,
     bytesOut: f.bytesOut,
+    noiseMs: gap(runs.map((r) => r.functions[i].duration)),
   }));
+  const totals = runs.map(totalOf);
+  const totalGap = gap(totals);
+  const fastestTotal = Math.min(...totals);
   return {
     signature: pipelineSignature(pipeline),
     sampleId: gathered.sampleId,
@@ -159,6 +177,7 @@ function toProfile(pipeline: Pipeline, stats: PreviewStats, gathered: GatheredEv
     sourceEvents: gathered.sourceEvents,
     events: gathered.events.length,
     totalMs: functions.reduce((sum, f) => sum + f.durationMs, 0),
+    spread: totalGap !== undefined && fastestTotal > 0 ? totalGap / fastestTotal : undefined,
     at: Date.now(),
     functions,
   };
@@ -171,14 +190,14 @@ export async function profilePipeline(
   signal?: AbortSignal,
 ): Promise<PipelineProfile> {
   const gathered = await gatherEvents(groupId, input, isStateful(pipeline), signal);
-  let best: PreviewStats | undefined;
-  const runs = gathered.repeated ? RUNS : RUNS_DISTINCT;
-  for (let run = 0; run < runs; run++) {
+  const runs: PreviewStats[] = [];
+  const count = gathered.repeated ? RUNS : RUNS_DISTINCT;
+  for (let run = 0; run < count; run++) {
     const { stats } = await previewPipeline(groupId, pipeline, gathered.events, signal);
     align(pipeline, stats);
-    best = fastest(best, stats);
+    runs.push(stats);
   }
-  return toProfile(pipeline, best!, gathered);
+  return toProfile(pipeline, runs, gathered);
 }
 
 /** How the two configurations' output events compare. */
@@ -213,8 +232,18 @@ type OutEvent = Record<string, string>;
  */
 function visible(event: Record<string, unknown>): OutEvent {
   const out: OutEvent = {};
-  for (const key of Object.keys(event).sort()) if (!key.startsWith('__')) out[key] = JSON.stringify(event[key]);
+  for (const key of Object.keys(event).sort()) if (!key.startsWith('__')) out[key] = canonical(event[key]);
   return out;
+}
+
+/** JSON with object keys in a fixed order, so two equal values always serialize the same way. */
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  if (value && typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    return `{${Object.keys(obj).sort().map((k) => `${JSON.stringify(k)}:${canonical(obj[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
 }
 
 const render = (event: OutEvent | undefined) =>
@@ -261,8 +290,8 @@ export async function comparePipelines(
   onProgress?: (done: number, total: number) => void,
 ): Promise<Comparison> {
   const sides = [
-    { pipeline: current, best: undefined as PreviewStats | undefined, totals: [] as number[], outputs: [] as OutEvent[][] },
-    { pipeline: edited, best: undefined as PreviewStats | undefined, totals: [] as number[], outputs: [] as OutEvent[][] },
+    { pipeline: current, runs: [] as PreviewStats[], outputs: [] as OutEvent[][] },
+    { pipeline: edited, runs: [] as PreviewStats[], outputs: [] as OutEvent[][] },
   ];
   const total = COMPARE_ROUNDS * 2;
   let done = 0;
@@ -272,14 +301,13 @@ export async function comparePipelines(
     for (const side of round % 2 ? [sides[1], sides[0]] : sides) {
       const result: PreviewResult = await previewPipeline(groupId, side.pipeline, gathered.events, signal);
       align(side.pipeline, result.stats);
-      side.best = fastest(side.best, result.stats);
-      side.totals.push(result.stats.functions.reduce((sum, f) => sum + f.duration, 0));
+      side.runs.push(result.stats);
       side.outputs.push(result.items.map(visible));
       onProgress?.(++done, total);
     }
   }
 
-  // The comparison uses each side's fastest run, so what matters is how repeatable the fastest run is:
+  // The comparison uses each side's fastest whole run, so what matters is how repeatable that run is:
   // the gap to the next fastest. One slow outlier among the runs doesn't make the fastest less reliable.
   const spreadOf = (totals: number[]) => {
     const [min, next] = [...totals].sort((x, y) => x - y);
@@ -291,7 +319,9 @@ export async function comparePipelines(
   const curVolatile = volatileFields(cur.outputs);
   const edVolatile = volatileFields(ed.outputs);
   const stable = !!curVolatile && !!edVolatile;
-  const ignore = new Set([...(curVolatile ?? []), ...(edVolatile ?? [])]);
+  // Only a field that varies in both versions is left out. One that varies only in the edited version
+  // is something the edit introduced, and has to show up as a difference.
+  const ignore = new Set([...(curVolatile ?? [])].filter((field) => edVolatile?.has(field)));
   const a = cur.outputs[0];
   const b = ed.outputs[0];
   let at = -1;
@@ -304,9 +334,9 @@ export async function comparePipelines(
     sourceEvents: gathered.sourceEvents,
     events: gathered.events.length,
     repeated: gathered.repeated,
-    current: toProfile(current, cur.best!, gathered),
-    edited: toProfile(edited, ed.best!, gathered),
-    spread: Math.max(spreadOf(cur.totals), spreadOf(ed.totals)),
+    current: toProfile(current, cur.runs, gathered),
+    edited: toProfile(edited, ed.runs, gathered),
+    spread: Math.max(spreadOf(cur.runs.map(totalOf)), spreadOf(ed.runs.map(totalOf))),
     outputMatch: !stable ? 'unstable' : at < 0 ? 'same' : 'different',
     currentOut: cur.outputs[0].length,
     editedOut: ed.outputs[0].length,
@@ -359,7 +389,9 @@ function anyOf(filters: (string | undefined)[]): string | undefined {
 /** Matches events from a Source. Internal metrics report as `cribl:`, and some Sources add a suffix to their ID. */
 function fromInput(input: Input): string {
   const type = input.type === 'criblmetrics' ? 'cribl' : input.type;
-  return `__inputId.startsWith('${type}:${input.id.replace(/['\\]/g, '\\$&')}')`;
+  const id = `${type}:${input.id.replace(/['\\]/g, '\\$&')}`;
+  // The suffix, when there is one, follows a colon; a bare prefix match would also take in Source `foo2`.
+  return `(__inputId=='${id}' || __inputId.startsWith('${id}:'))`;
 }
 
 /**

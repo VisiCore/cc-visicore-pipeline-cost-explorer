@@ -352,3 +352,115 @@ body {
   display: flex;
   gap: token('spacing.sm');
 }
+
+/* ---------- Recommendations ---------- */
+
+.rec-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rec-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: token('spacing.lg');
+  padding: token('spacing.md') 0;
+  border-block-end: token('border.default');
+}
+
+.rec-row:last-child {
+  border-block-end: none;
+}
+
+.rec-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: token('spacing.xs');
+  min-width: 0;
+}
+
+/* ---------- Numbered steps ---------- */
+
+.step-list {
+  display: flex;
+  flex-direction: column;
+  gap: token('spacing.lg');
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.step-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: token('spacing.md');
+  align-items: start;
+}
+
+.step-body {
+  display: flex;
+  flex-direction: column;
+  gap: token('spacing.xs');
+}
+
+/* A value with a proportional bar beside it, inside a table cell. */
+.share-cell {
+  min-width: 120px;
+}
+
+.summary-line {
+  display: flex;
+  flex-direction: column;
+  gap: token('spacing.xs');
+}
+
+/* A pipeline name with its Pack underneath, inside a table cell. */
+.name-cell {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* Figures laid out in a row, each a small label over a value. */
+.figure-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: token('spacing.xl');
+}
+
+.figure {
+  display: flex;
+  flex-direction: column;
+  gap: token('spacing.xs');
+}
+
+.rating-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: token('spacing.md');
+}
+
+/* Relative-length bar for ranking rows. Drawn as SVG so its length is an attribute, not an inline style. */
+.cost-bar {
+  display: block;
+  width: 100%;
+  height: 6px;
+}
+
+.cost-bar-track {
+  fill: token('color.background.accent.default');
+}
+
+.cost-bar-fill {
+  fill: token('color.background.accent.indicator');
+}
+
+/* Short table text that should stay on one line. */
+.nowrap {
+  white-space: nowrap;
+}

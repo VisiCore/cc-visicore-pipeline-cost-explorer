@@ -54,7 +54,14 @@ export function FunctionDrawer({
             <Row label="State">
               <Text>{STATE_LABEL[row.state]}</Text>
             </Row>
-            <Row label="Time per event">
+            <Row label="Cost per event entering the pipeline">
+              <Text>
+                {row.usPerPipelineEvent === undefined
+                  ? EMPTY
+                  : `${fmtMicros(row.usPerPipelineEvent)} µs${row.noise === undefined ? '' : `, runs ${fmtPercent(row.noise)} apart`}`}
+              </Text>
+            </Row>
+            <Row label="Time per event the function handled">
               <Text>{row.usPerEvent === undefined ? EMPTY : `${fmtMicros(row.usPerEvent)} µs`}</Text>
             </Row>
             <Row label="Share of pipeline time">

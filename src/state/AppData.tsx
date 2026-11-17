@@ -15,6 +15,7 @@ import {
   listSamples,
 } from '../lib/api';
 import { computeFates } from '../lib/fate';
+import { ratePipeline, RATING_RANK, recommend, suggestMove, type Rating, type Recommendation } from '../lib/recommend';
 import { analyzePipeline, measuredFindings, SEVERITY_RANK, topSeverity } from '../lib/analysis';
 import {
   capturePlanFor,
@@ -68,8 +69,12 @@ export interface FunctionRow {
   findingCount: number;
   severity: Severity | 'none';
   severityRank: number;
-  /** Microseconds per event entering this function. */
+  /** Microseconds per event entering this function: how slow the function itself is. */
   usPerEvent?: number;
+  /** Microseconds per event entering the pipeline: what the function adds to the pipeline's cost. */
+  usPerPipelineEvent?: number;
+  /** How far apart this function's two fastest runs were, as a ratio of its time. */
+  noise?: number;
   /** Share of the pipeline's measured time, 0–1. */
   share?: number;
   /** Estimated CPU seconds spent in this function over the selected time range. */
@@ -110,6 +115,13 @@ export interface PipelineRow {
   usPerEvent?: number;
   cpuSeconds?: number;
   profiledAt?: number;
+  /** How far apart the profile's two fastest runs were, as a ratio. */
+  noise?: number;
+  /** How efficient the pipeline is, with the reasons, most serious first. */
+  rating: Rating;
+  ratingReasons: string[];
+  /** Sorts least efficient first, then by cost. */
+  ratingScore: number;
 }
 
 export interface ProfileRequest {
@@ -138,6 +150,10 @@ interface AppData {
   error?: string;
   warnings: string[];
   trafficError?: string;
+  /** The group reports no pipeline event counts at all (Edge Fleets don't), so traffic is unknown, not zero. */
+  trafficUnknown: boolean;
+  /** Ranked things worth doing, with the CPU time at stake where it can be estimated. */
+  recommendations: Recommendation[];
   /** Set when the sample list could not be loaded, as opposed to there being no samples. */
   samplesError?: string;
   reload: () => void;
@@ -188,6 +204,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
   const [samples, setSamples] = useState<Sample[]>([]);
   const [traffic, setTraffic] = useState<Record<string, Traffic>>({});
+  const [trafficLoaded, setTrafficLoaded] = useState(false);
   const [profiles, setProfiles] = useState<Record<string, PipelineProfile>>({});
   const [sampleChoice, setSampleChoice] = useState<Record<string, string>>({});
   const [profiling, setProfiling] = useState<ProfilingState>();
@@ -216,7 +233,8 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
     (async () => {
       try {
         const user = await window.getCriblUser?.().catch(() => undefined);
-        if (user?.id) userKey.current = kvSafe(user.id);
+        // User IDs can contain characters such as `|` that the KV store rejects in a key, even encoded.
+        if (user?.id) userKey.current = user.id.replace(/[^A-Za-z0-9_-]/g, '_');
         const [list, prefs] = await Promise.all([listGroups(), kvGet<Prefs>(`prefs/${userKey.current}`)]);
         if (cancelled) return;
         setGroups(list);
@@ -298,6 +316,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       .then((t) => {
         if (cancelled) return;
         setTraffic(t);
+        setTrafficLoaded(true);
         setTrafficError(undefined);
       })
       .catch((e: Error) => {
@@ -367,6 +386,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       setWorkerLoad(undefined);
       setPackRoutes({});
       setTraffic({});
+      setTrafficLoaded(false);
       setProfiles({});
       setSampleChoice({});
       savePrefs({ groupId: id, range });
@@ -380,6 +400,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       setRangeState(next);
       // Don't show the old range's counts under the new range's label while the query runs.
       setTraffic({});
+      setTrafficLoaded(false);
       setRouteTraffic([]);
       setWorkerLoad(undefined);
       savePrefs({ groupId, range: next });
@@ -397,8 +418,9 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  const { pipelineRows, functionRows, profiledCount } = useMemo(() => {
-    const fates = computeFates(pipelines, routes, inputs, outputs, routeTraffic);
+  const { pipelineRows, functionRows, profiledCount, recommendations } = useMemo(() => {
+    const fates = computeFates(pipelines, routes, inputs, outputs, routeTraffic, packRoutes);
+    const current: Record<string, PipelineProfile | undefined> = {};
     const pRows: PipelineRow[] = [];
     const fRows: FunctionRow[] = [];
     let profiled = 0;
@@ -413,6 +435,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       const profile =
         saved && saved.signature === pipelineSignature(p) && !(repeated && isStateful(p)) ? saved : undefined;
       if (profile) profiled++;
+      current[p.key] = profile;
       const byIndex = new Map(profile?.functions.map((f) => [f.index, f]));
       const label = p.pack ? `${p.pack} / ${p.id}` : p.id;
 
@@ -451,6 +474,8 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
           severity,
           severityRank: severity === 'none' ? 0 : SEVERITY_RANK[severity],
           usPerEvent,
+          usPerPipelineEvent: m && profile ? (m.durationMs * 1000) / profile.events : undefined,
+          noise: m && m.noiseMs !== undefined && m.durationMs > 0 ? m.noiseMs / m.durationMs : undefined,
           share,
           cpuSeconds,
           sampleEventsIn: m?.eventsIn,
@@ -458,6 +483,25 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
         });
       }
 
+      const usPerEvent = profile ? (profile.totalMs * 1000) / profile.events : undefined;
+      const pipelineCpu = profile && t ? (t.inEvents * (profile.totalMs / profile.events)) / 1000 : undefined;
+      const move = profile ? suggestMove(p, profile) : undefined;
+      const fate = fates[p.key];
+      const { rating, reasons } = ratePipeline({
+        functionCount: analyzed.length,
+        // No row for a pipeline means no events, unless the group reports no event counts at all.
+        inEvents: t ? t.inEvents : Object.keys(traffic).length > 0 ? 0 : undefined,
+        profiled: !!profile,
+        usPerEvent,
+        discardedShare: fate?.incomplete ? undefined : fate?.discardedShare,
+        move:
+          move && profile && profile.totalMs > 0
+            ? { share: move.savedMs / profile.totalMs, what: `${p.conf.functions![move.from].id} #${move.from + 1}` }
+            : undefined,
+        findings: fRows
+          .filter((f) => f.pipelineKey === p.key && f.state === 'enabled')
+          .flatMap((f) => f.findings.map((x) => ({ severity: x.severity, title: x.title, share: f.share }))),
+      });
       const usable = (s: Sample) => !s.pack || s.pack === p.pack;
       const chosen = samples.find((s) => s.key === sampleChoice[p.key] && usable(s));
       const guess = chosen ? undefined : matchSample(p, samples);
@@ -477,13 +521,19 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
         usPerEvent: profile ? (profile.totalMs * 1000) / profile.events : undefined,
         cpuSeconds: profile && t ? (t.inEvents * (profile.totalMs / profile.events)) / 1000 : undefined,
         profiledAt: profile?.at,
+        noise: profile?.spread,
+        rating,
+        ratingReasons: reasons,
+        // Within a rating, the costlier pipeline matters more; without a cost, the busier one.
+        ratingScore: RATING_RANK[rating] * 1e15 + (pipelineCpu !== undefined ? 1e12 + pipelineCpu * 1e3 : (t?.inEvents ?? 0)),
         profileEvents: profile?.events,
         profileSource: profile?.sampleName,
         profileSourceEvents: profile?.sourceEvents,
         fate: fates[p.key],
-        discardedShare: fates[p.key]?.discardedShare,
+        // With part of the output on paths whose volume isn't measured, a share would be a guess.
+        discardedShare: fates[p.key]?.incomplete ? undefined : fates[p.key]?.discardedShare,
         wastedCpuSeconds:
-          fates[p.key] && profile && t
+          fates[p.key] && !fates[p.key].incomplete && profile && t
             ? ((t.inEvents * (profile.totalMs / profile.events)) / 1000) * fates[p.key].discardedShare
             : undefined,
         capture: p.pack
@@ -491,7 +541,12 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
           : capturePlanFor(p, routes, inputs),
       });
     }
-    return { pipelineRows: pRows, functionRows: fRows, profiledCount: profiled };
+    return {
+      pipelineRows: pRows,
+      functionRows: fRows,
+      profiledCount: profiled,
+      recommendations: recommend({ pipelines, profiles: current, rows: pRows, functions: fRows }),
+    };
   }, [pipelines, traffic, profiles, samples, sampleChoice, routes, inputs, outputs, routeTraffic, packRoutes]);
 
   const cancelProfiling = useCallback(() => abortRef.current?.abort(), []);
@@ -591,6 +646,8 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
     error,
     warnings,
     trafficError,
+    trafficUnknown: trafficLoaded && !trafficError && Object.keys(traffic).length === 0 && pipelines.length > 0,
+    recommendations,
     samplesError,
     reload,
     pipelines,

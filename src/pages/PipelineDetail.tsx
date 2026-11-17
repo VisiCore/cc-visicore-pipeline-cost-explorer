@@ -1,19 +1,20 @@
 import { useMemo, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { Alert, Button, Card, defineColumns, EmptyState, Table, Tag, Text } from '@capra/core';
+import { Alert, Button, Card, defineColumns, EmptyState, Progress, Table, Tag, Text } from '@capra/core';
 import { ArrowUpRightFromSquare, Flask, Play } from '@capra/icons';
 import { Page } from '../components/Page';
 import { FunctionDrawer, STATE_LABEL } from '../components/FunctionDrawer';
 import { ProfileDrawer } from '../components/ProfileDrawer';
-import { LinkButton, MetricCard, SeverityTag, sortRows, type Sort } from '../components/shared';
+import { LinkButton, MetricCard, RatingTag, SeverityTag, sortRows, type Sort } from '../components/shared';
 import { useAppData, type FunctionRow } from '../state/AppData';
-import { EMPTY, fmtDateTime, fmtInt, fmtMicros, fmtPercent, fmtSeconds } from '../lib/format';
+import { EMPTY, fmtAge, fmtCoreShare, fmtInt, fmtMicros, fmtPercent, fmtSeconds } from '../lib/format';
 import { criblPipelineUrl, listQuery, pipelineTestHref } from '../lib/useParamList';
 
 /** One pipeline: its functions in execution order, with cost and findings for each. */
 export function PipelineDetail() {
   const { pipelineKey = '' } = useParams();
-  const { isLoading, error, groups, groupId, pipelines, pipelineRows, functionRows, profiling } = useAppData();
+  const { isLoading, error, groups, groupId, pipelines, pipelineRows, functionRows, profiling, rangeSeconds } =
+    useAppData();
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
   const [profileOpen, setProfileOpen] = useState(false);
@@ -70,8 +71,8 @@ export function PipelineDetail() {
           render: (v) => fmtInt(v as number | undefined),
         },
         {
-          id: 'usPerEvent',
-          label: 'Time per event (µs)',
+          id: 'usPerPipelineEvent',
+          label: 'Cost per event (µs)',
           allowsSorting: true,
           render: (v) => fmtMicros(v as number | undefined),
         },
@@ -79,7 +80,24 @@ export function PipelineDetail() {
           id: 'share',
           label: 'Share of pipeline time',
           allowsSorting: true,
-          render: (v) => fmtPercent(v as number | undefined),
+          render: (v, item) =>
+            v === undefined ? (
+              EMPTY
+            ) : (
+              <div className="share-cell">
+                <Progress
+                  aria-label={`${item.type}, function ${item.position}: share of pipeline time`}
+                  size="sm"
+                  value={Math.round((v as number) * 100)}
+                />
+              </div>
+            ),
+        },
+        {
+          id: 'noise',
+          label: 'Variation between runs',
+          allowsSorting: true,
+          render: (v) => (v === undefined ? EMPTY : `±${fmtPercent(v as number)}`),
         },
         {
           id: 'cpuSeconds',
@@ -123,6 +141,23 @@ export function PipelineDetail() {
 
   return (
     <Page title={title} parent={parent}>
+      {pipeline && pipeline.functionCount > 0 && pipeline.rating !== 'idle' && (
+        <div className="span-12 rating-line">
+          <RatingTag rating={pipeline.rating} />
+          <Text>
+            {pipeline.ratingReasons.length
+              ? pipeline.ratingReasons.join(' · ')
+              : pipeline.rating === 'efficient'
+                ? 'Nothing measured or configured here stands out.'
+                : 'Profile this pipeline to rate it.'}
+          </Text>
+          {pipeline.profiledAt !== undefined && (
+            <Text variant="body-sm-normal" color="subtle">
+              {`Profiled ${fmtAge(pipeline.profiledAt).toLowerCase()} with ${(pipeline.profileSource ?? 'a sample').toLowerCase()}, ${fmtInt(pipeline.profileSourceEvents ?? pipeline.profileEvents)} events${pipeline.noise === undefined ? '' : `, ±${fmtPercent(pipeline.noise)}`}`}
+            </Text>
+          )}
+        </div>
+      )}
       <div className="span-3">
         <MetricCard
           label="Events in"
@@ -132,21 +167,15 @@ export function PipelineDetail() {
       </div>
       <div className="span-3">
         <MetricCard
-          label="Time per event"
+          label="Cost per event"
           value={pipeline?.usPerEvent === undefined ? '--' : `${fmtMicros(pipeline.usPerEvent)} µs`}
-          note={
-            pipeline?.profiledAt === undefined
-              ? undefined
-              : pipeline.profileSourceEvents !== undefined
-                ? `${pipeline.profileSource}: ${fmtInt(pipeline.profileSourceEvents)} events, run as ${fmtInt(pipeline.profileEvents)}`
-                : `${pipeline.profileSource ?? 'Sample'}: ${fmtInt(pipeline.profileEvents)} events`
-          }
         />
       </div>
       <div className="span-3">
         <MetricCard
           label="Estimated CPU time"
           value={pipeline?.cpuSeconds === undefined ? '--' : `${fmtSeconds(pipeline.cpuSeconds)} s`}
+          note={pipeline?.cpuSeconds === undefined ? undefined : fmtCoreShare(pipeline.cpuSeconds, rangeSeconds)}
         />
       </div>
       <div className="span-3">
@@ -212,7 +241,7 @@ export function PipelineDetail() {
               disabled={!pipeline || !!profiling}
               onClick={() => setProfileOpen(true)}
             >
-              {pipeline?.profiledAt === undefined ? 'Profile pipeline' : `Profile again (last ${fmtDateTime(pipeline.profiledAt)})`}
+              {pipeline?.profiledAt === undefined ? 'Profile pipeline' : 'Profile again'}
             </Button>
           </div>
         </div>
@@ -230,12 +259,11 @@ export function PipelineDetail() {
               visibleColumns={[
                 'position',
                 'type',
-                'description',
-                'state',
+                // Columns that say the same thing on every row are left out.
+                ...(functions.some((f) => f.description) ? (['description'] as const) : []),
+                ...(functions.some((f) => f.state !== 'enabled') ? (['state'] as const) : []),
                 'severityRank',
-                'sampleEventsIn',
-                'sampleEventsOut',
-                'usPerEvent',
+                'usPerPipelineEvent',
                 'share',
                 'cpuSeconds',
               ]}

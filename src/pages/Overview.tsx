@@ -1,144 +1,321 @@
 import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Alert, Button, Card, EmptyState, Link, Progress, Skeleton, Text } from '@capra/core';
+import { Alert, Button, Card, defineColumns, EmptyState, Link, Skeleton, Table, Tag, Text } from '@capra/core';
 import { Page } from '../components/Page';
-import { LinkButton, MetricCard, SeverityTag } from '../components/shared';
-import { useAppData, type FunctionRow } from '../state/AppData';
+import { LinkButton, MetricCard, RatingTag } from '../components/shared';
+import { useAppData, type FunctionRow, type PipelineRow } from '../state/AppData';
 import type { WorkerLoad } from '../lib/types';
-import { fmtInt, fmtMicros, fmtPercent, fmtSeconds } from '../lib/format';
-import { listQuery, pipelineHref } from '../lib/useParamList';
+import { EMPTY, fmtCoreShare, fmtInt, fmtMicros, fmtPercent, fmtSeconds } from '../lib/format';
+import { listQuery, pipelineHref, pipelineTestHref } from '../lib/useParamList';
 
-const TOP_N = 8;
+const TOP_PIPELINES = 8;
+const TOP_FIXES = 5;
+const TOP_FUNCTIONS = 5;
 
-function CardSkeleton() {
-  return <Skeleton loading title paragraph={{ rows: 4 }} />;
-}
+const wholeSeconds = (n: number | undefined) => (n === undefined ? EMPTY : `${fmtInt(Math.round(n))} s`);
 
 export function Overview() {
-  const { isLoading, error, pipelineRows, functionRows, profiledCount, groupId, workerLoad, rangeSeconds } =
-    useAppData();
+  const {
+    isLoading,
+    pipelineRows,
+    functionRows,
+    profiledCount,
+    workerLoad,
+    rangeSeconds,
+    recommendations,
+    trafficUnknown,
+  } = useAppData();
   const navigate = useNavigate();
   const openFunction = (row: FunctionRow) => navigate(`/functions?fn=${encodeURIComponent(row.id)}`);
 
   const stats = useMemo(() => {
-    const active = functionRows.filter((f) => f.state === 'enabled');
-    const withTraffic = pipelineRows.filter((p) => (p.inEvents ?? 0) > 0).length;
     const high = functionRows.reduce((n, f) => n + f.findings.filter((x) => x.severity === 'high').length, 0);
     const medium = functionRows.reduce((n, f) => n + f.findings.filter((x) => x.severity === 'medium').length, 0);
 
-    const hasCpu = functionRows.some((f) => (f.cpuSeconds ?? 0) > 0);
-    const measured = functionRows.filter((f) => f.usPerEvent !== undefined);
-    const costly = [...measured]
-      .sort((a, b) =>
-        hasCpu ? (b.cpuSeconds ?? 0) - (a.cpuSeconds ?? 0) : (b.usPerEvent ?? 0) - (a.usPerEvent ?? 0),
-      )
-      .slice(0, TOP_N);
+    const costly = functionRows
+      .filter((f) => (f.cpuSeconds ?? 0) > 0)
+      .sort((a, b) => (b.cpuSeconds ?? 0) - (a.cpuSeconds ?? 0))
+      .slice(0, TOP_FUNCTIONS);
 
-    const flagged = functionRows
-      .filter((f) => f.severityRank >= 2)
-      .sort((a, b) => b.severityRank - a.severityRank || (b.cpuSeconds ?? 0) - (a.cpuSeconds ?? 0))
-      .slice(0, TOP_N);
+    // The pipelines worth ranking: anything that is doing work, or is flagged.
+    const ranked = pipelineRows
+      .filter((p) => p.functionCount > 0 && p.rating !== 'idle')
+      .sort((a, b) => b.ratingScore - a.ratingScore);
+    const inefficient = ranked.filter((p) => p.rating === 'inefficient').length;
+    const review = ranked.filter((p) => p.rating === 'review').length;
 
-    // Pipelines doing real work whose output is then mostly thrown away, costliest first.
-    const discarded = pipelineRows
-      .filter((p) => (p.discardedShare ?? 0) >= 0.5 && p.functionCount > 0 && (p.inEvents ?? 0) > 0)
-      .sort((a, b) => (b.wastedCpuSeconds ?? 0) - (a.wastedCpuSeconds ?? 0) || (b.inEvents ?? 0) - (a.inEvents ?? 0))
-      .slice(0, TOP_N);
-
-    const pipelineEvents = pipelineRows.reduce((n, p) => n + (p.inEvents ?? 0), 0);
-    // A pipeline with no functions costs nothing, so its traffic counts as accounted for.
-    const profiledEvents = pipelineRows.reduce(
-      (n, p) => n + (p.profiledAt !== undefined || p.functionCount === 0 ? (p.inEvents ?? 0) : 0),
-      0,
+    const working = pipelineRows.filter((p) => p.functionCount > 0 && (p.inEvents ?? 0) > 0);
+    const unprofiled = working.filter((p) => p.profiledAt === undefined);
+    const pipelineEvents = working.reduce((n, p) => n + (p.inEvents ?? 0), 0);
+    const unprofiledEvents = unprofiled.reduce((n, p) => n + (p.inEvents ?? 0), 0);
+    const withCpu = pipelineRows.filter((p) => p.cpuSeconds !== undefined);
+    const wasted = pipelineRows.filter(
+      (p) => (p.discardedShare ?? 0) >= 0.5 && p.functionCount > 0 && (p.inEvents ?? 0) > 0,
     );
-    const estimatedCpu = pipelineRows.reduce((n, p) => n + (p.cpuSeconds ?? 0), 0);
 
     return {
-      active: active.length,
-      withTraffic,
       high,
       medium,
-      hasCpu,
       costly,
-      flagged,
-      discarded,
-      coverage: pipelineEvents > 0 ? profiledEvents / pipelineEvents : undefined,
-      estimatedCpu,
+      ranked,
+      inefficient,
+      review,
+      unprofiled: unprofiled.length,
+      unmeasuredShare: pipelineEvents > 0 ? unprofiledEvents / pipelineEvents : undefined,
+      estimatedCpu: withCpu.length ? withCpu.reduce((n, p) => n + (p.cpuSeconds ?? 0), 0) : undefined,
+      wastedPipelines: wasted.length,
+      wastedCpu: wasted.some((p) => p.wastedCpuSeconds !== undefined)
+        ? wasted.reduce((n, p) => n + (p.wastedCpuSeconds ?? 0), 0)
+        : undefined,
     };
   }, [functionRows, pipelineRows]);
 
-  const maxCost = stats.costly.length
-    ? Math.max(...stats.costly.map((f) => (stats.hasCpu ? (f.cpuSeconds ?? 0) : (f.usPerEvent ?? 0))))
-    : 0;
+  const columns = useMemo(
+    () =>
+      defineColumns<PipelineRow>([
+        {
+          id: 'name',
+          label: 'Pipeline',
+          render: (_v, item) => (
+            <div className="name-cell">
+              <Link href={pipelineHref(item.id)}>{item.name}</Link>
+              {item.pack && (
+                <Text variant="body-sm-normal" color="subtle">
+                  {item.pack}
+                </Text>
+              )}
+            </div>
+          ),
+        },
+        { id: 'rating', label: 'Rating', render: (_v, item) => <RatingTag rating={item.rating} /> },
+        {
+          id: 'ratingReasons',
+          label: 'Why',
+          render: (_v, item) =>
+            item.ratingReasons.length === 0
+              ? item.rating === 'unmeasured'
+                ? 'Profile it to find out'
+                : EMPTY
+              : item.ratingReasons.length === 1
+                ? item.ratingReasons[0]
+                : `${item.ratingReasons[0]} (+${item.ratingReasons.length - 1} more)`,
+        },
+        { id: 'inEvents', label: 'Events in', render: (v) => fmtInt(v as number | undefined) },
+        { id: 'usPerEvent', label: 'Cost per event (µs)', render: (v) => fmtMicros(v as number | undefined) },
+        { id: 'cpuSeconds', label: 'CPU time', render: (v) => wholeSeconds(v as number | undefined) },
+        {
+          id: 'id',
+          label: 'Next step',
+          render: (_v, item) =>
+            item.profiledAt === undefined ? (
+              <Button variant="tertiary" size="sm" onClick={() => navigate(pipelineHref(item.id))}>
+                Profile
+              </Button>
+            ) : item.rating === 'efficient' ? (
+              EMPTY
+            ) : (
+              <Button variant="tertiary" size="sm" onClick={() => navigate(pipelineTestHref(item.id))}>
+                Test a fix
+              </Button>
+            ),
+        },
+      ]),
+    [navigate],
+  );
+
+  const firstRun = !isLoading && profiledCount === 0 && pipelineRows.length > 0;
+  const fixes = recommendations.slice(0, TOP_FIXES);
+  const maxCost = stats.costly.length ? (stats.costly[0].cpuSeconds ?? 0) : 0;
+  const profilePath = `/pipelines${listQuery({ show: trafficUnknown ? ['unprofiled'] : ['traffic', 'unprofiled'] })}`;
 
   return (
     <Page title="Overview">
-      {!error && !isLoading && pipelineRows.length > 0 && profiledCount === 0 && (
+      {!isLoading && !firstRun && (stats.unmeasuredShare ?? 0) > 0.2 && (
         <div className="span-12">
           <Alert
             appearance="info"
-            title="No pipelines have been profiled yet"
-            action={{ label: 'Profile pipelines', onClick: () => navigate('/pipelines') }}
+            action={{
+              label: `Profile ${fmtInt(stats.unprofiled)} ${stats.unprofiled === 1 ? 'pipeline' : 'pipelines'}`,
+              onClick: () => navigate(profilePath),
+            }}
           >
-            Configuration findings are ready below. To measure how much time each function takes, profile pipelines
-            with a sample of their data.
+            {`${fmtPercent(stats.unmeasuredShare)} of traffic isn't measured yet, so the ratings below may change.`}
           </Alert>
         </div>
       )}
 
       <div className="span-3">
         <MetricCard
-          label="Pipelines"
-          value={isLoading ? '--' : fmtInt(pipelineRows.length)}
-          note={isLoading ? undefined : `${fmtInt(stats.withTraffic)} with traffic`}
+          label="Inefficient pipelines"
+          value={isLoading ? '--' : fmtInt(stats.inefficient)}
+          note={isLoading ? undefined : `${fmtInt(stats.review)} to review`}
+          noteColor={stats.review > 0 ? 'warning' : 'default'}
           drill={{
-            label: 'View pipelines with traffic',
-            onClick: () => navigate(`/pipelines${listQuery({ show: ['traffic'] })}`),
+            label: 'View inefficient pipelines',
+            onClick: () => navigate(`/pipelines${listQuery({ show: ['inefficient'] })}`),
           }}
         />
       </div>
       <div className="span-3">
         <MetricCard
-          label="Active functions"
-          value={isLoading ? '--' : fmtInt(stats.active)}
+          label="Pipeline CPU"
+          value={isLoading || stats.estimatedCpu === undefined ? '--' : fmtCoreShare(stats.estimatedCpu, rangeSeconds)}
+          note={
+            stats.estimatedCpu === undefined ? 'Not measured yet' : `${wholeSeconds(stats.estimatedCpu)}, profiled pipelines`
+          }
           drill={{
-            label: 'View active functions',
-            onClick: () => navigate(`/functions${listQuery({ state: ['enabled'] })}`),
+            label: 'View profiled pipelines',
+            onClick: () => navigate(`/pipelines${listQuery({ show: ['profiled'] })}`),
           }}
         />
       </div>
       <div className="span-3">
         <MetricCard
-          label="High-severity findings"
-          value={isLoading ? '--' : fmtInt(stats.high)}
+          label="Wasted on discarded output"
+          value={
+            isLoading
+              ? '--'
+              : stats.wastedPipelines === 0
+                ? 'None'
+                : stats.wastedCpu === undefined
+                  ? 'Unknown'
+                  : wholeSeconds(stats.wastedCpu)
+          }
+          note={
+            isLoading || stats.wastedPipelines === 0
+              ? undefined
+              : `${fmtInt(stats.wastedPipelines)} ${stats.wastedPipelines === 1 ? 'pipeline' : 'pipelines'}`
+          }
+          noteColor="warning"
+          drill={{
+            label: 'View pipelines whose output is discarded',
+            onClick: () => navigate(`/pipelines${listQuery({ show: ['discarded'] })}`),
+          }}
+        />
+      </div>
+      <div className="span-3">
+        <MetricCard
+          label="Findings"
+          value={isLoading ? '--' : `${fmtInt(stats.high)} high`}
           note={isLoading ? undefined : `${fmtInt(stats.medium)} medium`}
-          noteColor={stats.medium > 0 ? 'warning' : 'default'}
           drill={{
-            label: 'View functions with high-severity findings',
-            onClick: () => navigate(`/functions${listQuery({ severity: ['high'] })}`),
+            label: 'View functions with findings',
+            onClick: () => navigate(`/functions${listQuery({ severity: ['high', 'medium'] })}`),
           }}
         />
       </div>
-      <div className="span-3">
-        <MetricCard
-          label="Profiled pipelines"
-          value={isLoading ? '--' : `${fmtInt(profiledCount)} of ${fmtInt(pipelineRows.length)}`}
-          drill={{
-            label: profiledCount > 0 ? 'View profiled pipelines' : 'View pipelines to profile',
-            onClick: () => navigate(`/pipelines${listQuery({ show: [profiledCount > 0 ? 'profiled' : 'traffic'] })}`),
-          }}
-        />
+
+      {firstRun ? (
+        <div className="span-12">
+          <EmptyState
+            illustration="Hibernating"
+            title="Measure your busiest pipelines"
+            description="Captures live events and runs them through Cribl's preview to time every function. Nothing is sent to Destinations."
+          >
+            <Button variant="primary" size="sm" onClick={() => navigate(profilePath)}>
+              Profile pipelines
+            </Button>
+          </EmptyState>
+        </div>
+      ) : (
+        <div className="span-12">
+          <Card>
+            <Card.Header>
+              <Card.Title>Pipeline efficiency</Card.Title>
+              <Card.Description>Pipelines doing work in the selected range, least efficient first</Card.Description>
+              <Card.Action>
+                <Button
+                  variant="tertiary"
+                  size="sm"
+                  onClick={() => navigate(`/pipelines${listQuery({ show: trafficUnknown ? [] : ['traffic'] })}`)}
+                >
+                  View all
+                </Button>
+              </Card.Action>
+            </Card.Header>
+            <Card.Content>
+              {!isLoading && stats.ranked.length === 0 ? (
+                <EmptyState
+                  illustration="Hibernating"
+                  title="No pipelines to rate"
+                  description="No pipeline with functions received events in the selected range."
+                />
+              ) : (
+                <div className="table-wrap">
+                  <Table
+                    aria-label="Pipeline efficiency"
+                    columns={columns}
+                    visibleColumns={['name', 'rating', 'ratingReasons', 'inEvents', 'usPerEvent', 'cpuSeconds', 'id']}
+                    items={stats.ranked.slice(0, TOP_PIPELINES)}
+                    isLoading={isLoading}
+                  />
+                </div>
+              )}
+            </Card.Content>
+          </Card>
+        </div>
+      )}
+
+      <div className="span-6">
+        <Card>
+          <Card.Header>
+            <Card.Title>Top fixes</Card.Title>
+            <Card.Description>Specific changes, ranked by the CPU time at stake</Card.Description>
+            <Card.Action>
+              <Button
+                variant="tertiary"
+                size="sm"
+                onClick={() => navigate(`/functions${listQuery({ severity: ['high', 'medium'] })}`)}
+              >
+                All findings
+              </Button>
+            </Card.Action>
+          </Card.Header>
+          <Card.Content>
+            {isLoading ? (
+              <Skeleton loading title paragraph={{ rows: 4 }} />
+            ) : fixes.length === 0 ? (
+              <EmptyState
+                illustration="Celebration"
+                title="No fixes to suggest"
+                description="Nothing specific is flagged in this group's pipelines."
+              />
+            ) : (
+              <ul className="rank-list">
+                {fixes.map((r) => (
+                  <li key={r.id} className="rank-row">
+                    <div className="rank-row-main">
+                      <LinkButton label={`${r.title}, in ${r.where}`} onClick={() => navigate(r.action.href)}>
+                        {r.title}
+                      </LinkButton>
+                      <Text variant="body-sm-normal" color="subtle">
+                        {r.where}
+                      </Text>
+                    </div>
+                    <div className="rank-row-value">
+                      {r.seconds === undefined ? (
+                        <Tag size="sm">Not measured</Tag>
+                      ) : (
+                        <Tag size="sm" color={r.secondsKind === 'saves' ? 'success' : 'default'}>
+                          {r.secondsKind === 'saves'
+                            ? `Saves about ${wholeSeconds(r.seconds)}`
+                            : `${wholeSeconds(r.seconds)} CPU`}
+                        </Tag>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card.Content>
+        </Card>
       </div>
 
       <div className="span-6">
         <Card>
           <Card.Header>
-            <Card.Title>{stats.hasCpu ? 'Highest CPU time' : 'Slowest functions'}</Card.Title>
-            <Card.Description>
-              {stats.hasCpu
-                ? 'Measured time per event × events through the pipeline in the selected time range'
-                : 'Measured time per event'}
-            </Card.Description>
+            <Card.Title>Costliest functions</Card.Title>
+            <Card.Description>CPU time in the selected range</Card.Description>
             <Card.Action>
               <Button variant="tertiary" size="sm" onClick={() => navigate('/functions')}>
                 View all
@@ -147,138 +324,42 @@ export function Overview() {
           </Card.Header>
           <Card.Content>
             {isLoading ? (
-              <CardSkeleton />
+              <Skeleton loading title paragraph={{ rows: 4 }} />
             ) : stats.costly.length === 0 ? (
               <EmptyState
                 illustration="Hibernating"
                 title="No measurements yet"
-                description="Profile a pipeline to see which of its functions take the most time."
-              >
-                <Button variant="primary" size="sm" onClick={() => navigate('/pipelines')}>
-                  Profile pipelines
-                </Button>
-              </EmptyState>
-            ) : (
-              <ul className="rank-list">
-                {stats.costly.map((f) => {
-                  const cost = stats.hasCpu ? (f.cpuSeconds ?? 0) : (f.usPerEvent ?? 0);
-                  return (
-                    <li key={f.id} className="rank-row">
-                      <div className="rank-row-main">
-                        <LinkButton label={`${f.type}, function ${f.position} in ${f.pipeline}`} onClick={() => openFunction(f)}>
-                          {`${f.type} #${f.position}`}
-                        </LinkButton>
-                        <Link href={pipelineHref(f.pipelineKey)}>{f.pipeline}</Link>
-                      </div>
-                      <div className="rank-row-bar">
-                        <Progress
-                          aria-label={`Relative cost of ${f.type}, function ${f.position} in ${f.pipeline}`}
-                          size="sm"
-                          value={maxCost > 0 ? Math.round((cost / maxCost) * 100) : 0}
-                        />
-                      </div>
-                      <div className="rank-row-value">
-                        <Text variant="body-sm-semibold">
-                          {stats.hasCpu ? `${fmtSeconds(f.cpuSeconds ?? 0)} s` : `${fmtMicros(f.usPerEvent)} µs`}
-                        </Text>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </Card.Content>
-        </Card>
-      </div>
-
-      <div className="span-6">
-        <Card>
-          <Card.Header>
-            <Card.Title>Functions to review</Card.Title>
-            <Card.Description>{`Medium and high severity findings${groupId ? ` in ${groupId}` : ''}`}</Card.Description>
-            <Card.Action>
-              <Button variant="tertiary" size="sm" onClick={() => navigate(`/functions${listQuery({ severity: ['high', 'medium'] })}`)}>
-                View all
-              </Button>
-            </Card.Action>
-          </Card.Header>
-          <Card.Content>
-            {isLoading ? (
-              <CardSkeleton />
-            ) : stats.flagged.length === 0 ? (
-              <EmptyState
-                illustration="Celebration"
-                title="Nothing flagged"
-                description="No medium or high severity findings in this group's pipelines."
+                description="Profile a pipeline to see which functions take the most time."
               />
             ) : (
               <ul className="rank-list">
-                {stats.flagged.map((f) => (
+                {stats.costly.map((f) => (
                   <li key={f.id} className="rank-row">
                     <div className="rank-row-main">
-                      <LinkButton label={`${f.type}, function ${f.position} in ${f.pipeline}`} onClick={() => openFunction(f)}>
+                      <LinkButton
+                        label={`${f.type}, function ${f.position} in ${f.pipeline}`}
+                        onClick={() => openFunction(f)}
+                      >
                         {`${f.type} #${f.position}`}
                       </LinkButton>
-                      <Link href={pipelineHref(f.pipelineKey)}>{f.pipeline}</Link>
-                    </div>
-                    <div className="rank-row-finding">
-                      <LinkButton
-                        label={`Show all functions with the finding ${f.findings[0].title}`}
-                        onClick={() => navigate(`/functions${listQuery({ finding: [f.findings[0].title] })}`)}
-                      >
-                        {f.findings[0].title}
-                      </LinkButton>
-                    </div>
-                    <div className="rank-row-value">
-                      <SeverityTag severity={f.severity} count={f.findingCount} />
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Card.Content>
-        </Card>
-      </div>
-
-      <div className="span-6">
-        <Card>
-          <Card.Header>
-            <Card.Title>Output discarded downstream</Card.Title>
-            <Card.Description>
-              Pipelines that process events which are then dropped or sent to a DevNull Destination
-            </Card.Description>
-            <Card.Action>
-              <Button variant="tertiary" size="sm" onClick={() => navigate(`/pipelines${listQuery({ show: ['discarded'] })}`)}>
-                View all
-              </Button>
-            </Card.Action>
-          </Card.Header>
-          <Card.Content>
-            {isLoading ? (
-              <CardSkeleton />
-            ) : stats.discarded.length === 0 ? (
-              <EmptyState
-                illustration="Celebration"
-                title="No discarded output found"
-                description="No pipeline with traffic has most of its output thrown away downstream."
-              />
-            ) : (
-              <ul className="rank-list">
-                {stats.discarded.map((p) => (
-                  <li key={p.id} className="rank-row">
-                    <div className="rank-row-main">
-                      <Link href={pipelineHref(p.id)}>{p.pack ? `${p.pack} / ${p.name}` : p.name}</Link>
                       <Text variant="body-sm-normal" color="subtle">
-                        {p.fate?.paths.find((x) => x.discarded)?.reason ?? ''}
+                        {f.pipeline}
                       </Text>
                     </div>
-                    <div className="rank-row-finding">
-                      <Text variant="body-sm-normal">{`${fmtPercent(p.discardedShare)} of ${fmtInt(p.inEvents)} events`}</Text>
+                    <div className="rank-row-bar">
+                      {/* A plain bar: the length compares functions, and a percentage here would read as a share of all CPU. */}
+                      <svg className="cost-bar" viewBox="0 0 100 6" preserveAspectRatio="none" aria-hidden="true">
+                        <rect className="cost-bar-track" width="100" height="6" rx="3" />
+                        <rect
+                          className="cost-bar-fill"
+                          width={maxCost > 0 ? Math.max(2, ((f.cpuSeconds ?? 0) / maxCost) * 100) : 0}
+                          height="6"
+                          rx="3"
+                        />
+                      </svg>
                     </div>
                     <div className="rank-row-value">
-                      <Text variant="body-sm-semibold">
-                        {p.wastedCpuSeconds === undefined ? 'Not profiled' : `${fmtSeconds(p.wastedCpuSeconds)} s`}
-                      </Text>
+                      <Text variant="body-sm-semibold">{wholeSeconds(f.cpuSeconds)}</Text>
                     </div>
                   </li>
                 ))}
@@ -288,102 +369,85 @@ export function Overview() {
         </Card>
       </div>
 
-      <div className="span-6">
-        <Card>
-          <Card.Header>
-            <Card.Title>Worker load check</Card.Title>
-            <Card.Description>How the profiled estimates compare with what the Workers report</Card.Description>
-          </Card.Header>
-          <Card.Content>
-            {isLoading ? (
-              <CardSkeleton />
-            ) : !workerLoad || workerLoad.workers === 0 ? (
-              <EmptyState
-                illustration="Hibernating"
-                title="No Worker load data"
-                description="Worker details or load metrics are not available for this group and time range."
-              />
-            ) : (
-              <WorkerLoadCheck
+      {!isLoading && workerLoad && workerLoad.workers > 0 && (workerLoad.criblCores || workerLoad.busyCores) && (
+        <div className="span-12">
+          <Card>
+            <Card.Header>
+              <Card.Title>Estimate vs. Worker CPU</Card.Title>
+            </Card.Header>
+            <Card.Content>
+              <WorkerCheck
                 load={workerLoad}
                 rangeSeconds={rangeSeconds}
                 estimatedCpu={stats.estimatedCpu}
-                coverage={stats.coverage}
-                profiledCount={profiledCount}
+                unmeasuredShare={stats.unmeasuredShare}
               />
-            )}
-          </Card.Content>
-        </Card>
-      </div>
+            </Card.Content>
+          </Card>
+        </div>
+      )}
     </Page>
   );
 }
 
-function WorkerLoadCheck({
+function Figure({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="figure">
+      <Text variant="body-sm-normal" color="subtle">
+        {label}
+      </Text>
+      <Text variant="body-md-semibold">{value}</Text>
+    </div>
+  );
+}
+
+function WorkerCheck({
   load,
   rangeSeconds,
   estimatedCpu,
-  coverage,
-  profiledCount,
+  unmeasuredShare,
 }: {
   load: WorkerLoad;
   rangeSeconds: number;
-  estimatedCpu: number;
-  coverage: number | undefined;
-  profiledCount: number;
+  estimatedCpu: number | undefined;
+  unmeasuredShare: number | undefined;
 }) {
-  const loadSeconds = load.busyCores * rangeSeconds;
-  const explained = loadSeconds > 0 && profiledCount > 0 ? estimatedCpu / loadSeconds : undefined;
+  // Real CPU from the Workers when they answered; otherwise the hosts' load average as a rough ceiling.
+  const measured = !!load.criblCores && !!load.cpuWorkers;
+  // When only some Workers were asked, assume the rest are similar.
+  const cores = measured ? (load.criblCores! * load.workers) / load.cpuWorkers! : (load.busyCores ?? 0);
+  const estimatedCores = estimatedCpu === undefined ? undefined : estimatedCpu / rangeSeconds;
+  const explained = estimatedCores !== undefined && cores > 0 ? estimatedCores / cores : undefined;
+  const basis = measured ? 'the CPU Cribl uses on the Workers' : "the Workers' load average";
   // Only draw a conclusion once most of the traffic has actually been measured.
   const conclusion =
-    explained === undefined || coverage === undefined
-      ? 'Profile the pipelines that carry traffic to compare their estimated cost with Worker load.'
-      : coverage < 0.8
-        ? 'Too little of the traffic is profiled to judge where Worker load comes from. Profile the remaining busy pipelines.'
+    explained === undefined
+      ? 'Profile pipelines to compare their estimated cost with what the Workers use.'
+      : (unmeasuredShare ?? 0) > 0.2
+        ? 'Too much traffic is unmeasured to compare yet.'
         : explained < 0.25
-          ? 'Pipeline functions explain only a small part of Worker load. Most of it is elsewhere: receiving and parsing events at Sources, serializing and sending at Destinations, and other processes on the hosts.'
+          ? `Pipeline functions are a small part of ${basis}, so tuning them will not move Worker CPU much.`
           : explained <= 1.2
-            ? 'Pipeline functions account for a substantial part of Worker load, so the function rankings are a good guide to where to optimize.'
-            : 'The estimate exceeds measured load, so the Leader timings overstate cost on these Workers. Use the rankings, not the absolute seconds.';
+            ? `Pipeline functions are a large part of ${basis}, so fixing the pipelines above should show on the Workers.`
+            : `The estimate is higher than ${basis}, so trust the rankings rather than the absolute seconds.`;
   return (
-    <div className="drawer-stack">
-      <dl className="detail-list">
-        <dt>
-          <Text color="subtle">Workers</Text>
-        </dt>
-        <dd>
-          <Text>{`${fmtInt(load.workers)} with ${fmtInt(load.cores)} cores`}</Text>
-        </dd>
-        <dt>
-          <Text color="subtle">Average load</Text>
-        </dt>
-        <dd>
-          <Text>
-            {`${fmtSeconds(load.busyCores)} cores busy${load.cores > 0 ? `, ${fmtPercent(load.busyCores / load.cores)} of capacity` : ''}`}
-          </Text>
-        </dd>
-        <dt>
-          <Text color="subtle">Profiled pipeline functions</Text>
-        </dt>
-        <dd>
-          <Text>
-            {explained === undefined
-              ? '--'
-              : `${fmtSeconds(estimatedCpu)} s, ${fmtPercent(explained)} of Worker load`}
-          </Text>
-        </dd>
-        <dt>
-          <Text color="subtle">Traffic accounted for</Text>
-        </dt>
-        <dd>
-          <Text>{coverage === undefined ? '--' : `${fmtPercent(coverage)} of pipeline events`}</Text>
-        </dd>
-      </dl>
+    <div className="drawer-section">
+      <div className="figure-row">
+        <Figure label="Workers" value={`${fmtInt(load.workers)}, ${fmtInt(load.cores)} cores`} />
+        <Figure
+          label={measured ? 'CPU used by Cribl' : 'Load average'}
+          value={`${fmtSeconds(cores)} cores${load.cores > 0 ? ` (${fmtPercent(cores / load.cores)})` : ''}`}
+        />
+        <Figure
+          label="Estimated for pipeline functions"
+          value={
+            estimatedCores === undefined
+              ? EMPTY
+              : `${fmtSeconds(estimatedCores)} cores${explained === undefined ? '' : ` (${fmtPercent(explained)} of it)`}`
+          }
+        />
+      </div>
       <Text>{conclusion}</Text>
-      <Text variant="body-sm-normal" color="subtle">
-        Load is the hosts' load average, which counts every process on the machine, so it is an upper bound on what
-        Cribl uses.
-      </Text>
     </div>
   );
 }

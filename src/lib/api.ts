@@ -194,9 +194,29 @@ export async function getRouteTraffic(groupId: string, earliest: number, latest:
  * Worker count, cores, and average load for a group. Load is the hosts' load average, which counts
  * every process on the machine, not only Cribl, so it is an upper bound on what Cribl is using.
  */
+/** Workers asked directly for their CPU use; enough to characterize a group without flooding a large Fleet. */
+const MAX_CPU_WORKERS = 20;
+
+/** CPU used by one Worker's Cribl processes over the range, in cores. Asked of the Worker itself. */
+async function workerCpuCores(workerId: string, earliest: number, latest: number): Promise<number | undefined> {
+  try {
+    const res = await postJson<{ results?: Record<string, unknown>[] }>(`/w/${enc(workerId)}/system/metrics/query`, {
+      where: 'true',
+      aggs: { aggregations: ['avg("system.cpu_perc").as("cpu")'], splitBys: ['__worker_process'], cumulative: true },
+      earliest,
+      latest,
+    });
+    if (!res.results?.length) return undefined;
+    // Each worker process reports the percentage of one core it is using.
+    return res.results.reduce((n, row) => n + Number(row.cpu ?? 0), 0) / 100;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function getWorkerLoad(groupId: string, earliest: number, latest: number): Promise<WorkerLoad> {
   const [workers, load] = await Promise.all([
-    getJson<Items<{ group?: string; info?: { cpus?: number } }>>(
+    getJson<Items<{ id: string; group?: string; disconnected?: boolean; info?: { cpus?: number } }>>(
       `/master/workers?filterExp=${enc(`group=='${groupId.replace(/['\\]/g, '\\$&')}'`)}&limit=1000`,
     ),
     postJson<{ results?: Record<string, unknown>[] }>('/system/metrics/query', {
@@ -206,11 +226,18 @@ export async function getWorkerLoad(groupId: string, earliest: number, latest: n
       latest,
     }),
   ]);
-  const mine = workers.items.filter((w) => w.group === groupId);
+  // A node that is not connected contributes neither capacity nor load.
+  const mine = workers.items.filter((w) => w.group === groupId && !w.disconnected);
+  const cpu = (
+    await mapLimit(mine.slice(0, MAX_CPU_WORKERS), 4, (w) => workerCpuCores(w.id, earliest, latest))
+  ).filter((c): c is number => c !== undefined);
   return {
+    criblCores: cpu.length ? cpu.reduce((n, c) => n + c, 0) : undefined,
+    cpuWorkers: cpu.length,
     workers: mine.length,
-    cores: mine.reduce((n, w) => n + (w.info?.cpus ?? 0), 0),
-    busyCores: (load.results ?? []).reduce((n, row) => n + Number(row.load ?? 0), 0),
+    cores: mine.reduce((n, w) => n + Number(w.info?.cpus ?? 0), 0),
+    // No samples is "unknown", which must not be shown as an idle group.
+    busyCores: load.results?.length ? load.results.reduce((n, row) => n + Number(row.load ?? 0), 0) : undefined,
   };
 }
 
@@ -321,6 +348,12 @@ export async function previewPipeline(
     signal,
   );
   if (!res.stats?.functions) throw new Error(res.message || 'Preview returned no function statistics');
+  // A preview that timed out or failed part-way still returns statistics, for the events it got to.
+  // Timings from it would be divided by the full event count and come out too low.
+  const reached = res.stats.functions[0]?.eventsIn;
+  if (reached !== undefined && reached < events.length) {
+    throw new Error(`Preview processed only ${reached} of ${events.length} events; try again or use fewer events`);
+  }
   // Control records such as stats can travel alongside the output events.
   const items = (res.items ?? []).filter((e) => e.__criblEventType === undefined || e.__criblEventType === 'event');
   return { stats: res.stats, items };

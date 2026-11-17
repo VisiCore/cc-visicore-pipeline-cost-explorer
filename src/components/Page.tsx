@@ -77,7 +77,9 @@ export function Page({
   parents?: { label: string; href: string }[];
   children: React.ReactNode;
 }) {
-  const { error, warnings, trafficError, reload, profiling, cancelProfiling } = useAppData();
+  const { error, warnings, trafficError, trafficUnknown, groups, groupId, reload, profiling, cancelProfiling } =
+    useAppData();
+  const isFleet = groups.find((g) => g.id === groupId)?.type === 'edge';
   return (
     <>
       <PageHeader
@@ -106,6 +108,13 @@ export function Page({
             <div className="span-12">
               <Alert appearance="warning" title="Throughput metrics are unavailable">
                 {`Event counts and CPU time estimates are hidden. ${trafficError}`}
+              </Alert>
+            </div>
+          )}
+          {!error && !trafficError && trafficUnknown && (
+            <div className="span-12">
+              <Alert appearance="info" title="Event counts are not available for this group">
+                {`${isFleet ? 'Fleets do not report pipeline event counts to the Leader' : 'No pipeline event counts were reported for the selected time range'}, so traffic, CPU time estimates, and discarded-output checks are empty. Configuration findings and per-event timings still work.`}
               </Alert>
             </div>
           )}

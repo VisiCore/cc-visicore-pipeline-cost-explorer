@@ -19,19 +19,58 @@ export function Documentation() {
             <ol>
               <li>Choose a Worker Group or Fleet in the page header. Your choice is remembered.</li>
               <li>
-                Open <strong>Functions</strong> to see configuration findings right away. No profiling is needed for
-                these.
+                On <strong>Pipelines</strong>, select <strong>Profile matched</strong> to measure every pipeline that
+                is receiving events. The app shows what each will be measured with before anything runs.
               </li>
               <li>
-                Open <strong>Pipelines</strong>, select a pipeline's name to open it, select{' '}
-                <strong>Profile pipeline</strong>, choose live capture or a saved sample that
-                represents its data, and run the profile.
+                Return to <strong>Overview</strong>. <strong>Pipeline efficiency</strong> rates each pipeline and
+                says why, least efficient first.
               </li>
               <li>
-                Return to <strong>Overview</strong> or <strong>Functions</strong>. Functions are now ranked by measured
-                cost.
+                Select <strong>Test a fix</strong> on a pipeline to measure a change against the saved pipeline
+                before you make it in Cribl.
               </li>
             </ol>
+            <p>
+              Configuration findings on the <strong>Functions</strong> page need no profiling and are available
+              straight away.
+            </p>
+
+            <h2>Pipeline ratings</h2>
+            <p>
+              The Overview and the Pipelines page rate every pipeline that is doing work, least efficient first,
+              with the reason beside it.
+            </p>
+            <ul>
+              <li>
+                <strong>Inefficient</strong> means there is measured evidence of wasted work: most of its output is
+                discarded downstream, it costs 50 µs or more per event, a Drop or Regex Filter removes events after
+                a fifth or more of the pipeline's work has been done on them, or a function with a high-severity
+                configuration finding takes a quarter or more of the pipeline's time.
+              </li>
+              <li>
+                <strong>Review</strong> means something is worth a look: 15 µs or more per event, a smaller saving
+                from moving a function earlier, or a medium or high configuration finding.
+              </li>
+              <li>
+                <strong>Efficient</strong> means it has been profiled and none of the above applies.
+              </li>
+              <li>
+                <strong>Not measured</strong> means it is receiving events but has not been profiled.
+              </li>
+            </ul>
+            <p>
+              A rating says how well a pipeline does its work, not how much it matters. A pipeline rated
+              Inefficient that handles few events costs little; the CPU time column shows what is at stake.
+            </p>
+
+            <h3>Top fixes</h3>
+            <p>
+              The Overview also lists specific changes, ranked by CPU time: stop processing output that is
+              discarded, move a Drop or Regex Filter earlier, or fix a flagged function. Selecting one opens the
+              test page so you can measure the change before making it in Cribl. A suggested move is a candidate,
+              not a guarantee: the test checks that the output stays the same.
+            </p>
 
             <h2>Drilling down</h2>
             <ul>
@@ -65,7 +104,7 @@ export function Documentation() {
               Preview reports the time spent in each function. The events are repeated up to 1,000 so that start-up
               cost does not dominate, and each pipeline is run twice with the faster result kept. A pipeline with
               functions that keep state between events (Aggregations, Rollup Metrics, Suppress, Sampling, Dynamic
-              Sampling) is never given repeated events, because seeing the same events again changes what those
+              Sampling, and also Code and Chain, which may keep state) is never given repeated events, because seeing the same events again changes what those
               functions do. Each of its events is run once, and it is run four times instead of twice. The events
               come from one of two places:
             </p>
@@ -83,7 +122,15 @@ export function Documentation() {
             </ul>
             <ul>
               <li>
-                <strong>Time per event (µs)</strong> is the function's time divided by the events that reached it.
+                <strong>Cost per event (µs)</strong> is the function's time divided by the events that entered the
+                pipeline. It is what the function adds to the cost of each event the pipeline receives, so the
+                functions of a pipeline add up to the pipeline's cost per event. A function behind a Drop costs
+                less per pipeline event because fewer events reach it. The function's details also show its time
+                per event it actually handled.
+              </li>
+              <li>
+                <strong>Variation between runs</strong> is how far apart the function's two fastest runs were. A
+                large figure means the timing is not steady enough to act on by itself; profile again.
               </li>
               <li>
                 <strong>Share of pipeline time</strong> is the function's time as a fraction of all functions in the
@@ -101,7 +148,12 @@ export function Documentation() {
               <strong>CPU time (s)</strong> is an estimate: the measured time per pipeline event multiplied by the
               number of events that entered the pipeline in the selected time range (the{' '}
               <code>pipe.in_events</code> metric). It answers "which function costs the most given real traffic". It
-              is empty for pipelines that have not been profiled or that had no traffic in the range.
+              is empty for pipelines that have not been profiled or that had no traffic in the range. It is also
+              shown as a share of one core: 864 seconds in 24 hours is 1% of one core kept busy all day.
+            </p>
+            <p>
+              Fleets do not report pipeline event counts to the Leader. For a Fleet, CPU time and the checks that
+              depend on event counts are empty; findings and per-event costs still work.
             </p>
 
             <h2>Output discarded downstream</h2>
@@ -115,7 +167,10 @@ export function Documentation() {
                 For a pre-processing pipeline, it uses route metrics to see which routes actually received that
                 Source's events, then reads where those routes send them.
               </li>
-              <li>For a Pack pipeline, it follows the route into the Pack, or the Pack's own Sources.</li>
+              <li>
+                For a Pack pipeline, it finds the Pack routes that run that pipeline, then follows the route that
+                sends events into the Pack (or the Pack's own Sources) to where they end up.
+              </li>
             </ul>
             <p>
               Output counts as discarded when it is sent to a DevNull Destination, or to a pipeline whose first
@@ -124,32 +179,37 @@ export function Documentation() {
             </p>
             <p>
               This is traced from configuration and metrics, not from following individual events. Check the paths
-              shown before acting, and remember that a pipeline inside a Pack is given the Pack's result as a whole.
+              shown before acting. When a Pack's events leave by several routes that end differently, or part of
+              the output goes over a QuickConnect link whose volume is not measured, no percentage is shown,
+              because there is no telling which path a given pipeline's events take.
             </p>
 
-            <h2>Worker load check</h2>
+            <h2>Check against Worker CPU</h2>
             <p>
-              The Overview compares the estimated CPU time of profiled pipelines with the load the Workers report,
-              so you can tell whether pipeline functions are where the load comes from.
+              The Overview compares the estimated CPU time of profiled pipelines with the CPU the Workers actually
+              use, so you can tell whether the estimates are believable and whether pipeline functions are where
+              the CPU goes.
             </p>
             <ul>
               <li>
-                <strong>Average load</strong> is the sum of the Workers' load averages over the selected time range,
-                expressed as cores busy.
+                <strong>CPU used by Cribl</strong> is what each Worker's Cribl processes report, averaged over the
+                selected range and added up, in cores. Each connected Worker is asked directly, up to 20 of them;
+                with more, the figure is scaled up from those asked.
               </li>
               <li>
-                <strong>Profiled pipeline functions</strong> is the estimated CPU time of all profiled pipelines, and
-                its share of that load.
+                <strong>Estimated for pipeline functions</strong> is the estimated CPU time of all profiled
+                pipelines, expressed in cores, and its share of that CPU.
               </li>
               <li>
-                <strong>Traffic accounted for</strong> is the share of pipeline events that went through a profiled
-                pipeline or one with no functions. A conclusion is only drawn once this reaches 80%.
+                <strong>Traffic profiled</strong> is the share of events through pipelines that have functions
+                which went through a profiled one. A conclusion is only drawn once this reaches 80%.
               </li>
             </ul>
             <p>
-              Load average counts every process on the host, not only Cribl, so it is an upper bound. A low share
-              means most Worker load is outside pipeline functions: receiving and parsing at Sources, serializing
-              and sending at Destinations, or other software on the machine.
+              Cribl's CPU covers everything a Worker does: receiving and parsing at Sources, routing, pipeline
+              functions, and sending at Destinations. A low share for functions means tuning them will not move
+              Worker CPU much. If no Worker can be asked, the hosts' load average is used instead and labelled as
+              such; it counts every program on the machine and is only a rough ceiling.
             </p>
 
             <h2>Choosing the events</h2>
@@ -203,7 +263,7 @@ export function Documentation() {
             <ul>
               <li>
                 The saved pipeline and your edited version are run against exactly the same events, three times
-                each, taking turns, with the fastest time per function kept.
+                each, taking turns, and the fastest whole run of each version is the one shown.
               </li>
               <li>
                 Times are shown per event entering the pipeline, so the function rows add up to the pipeline total
@@ -222,6 +282,10 @@ export function Documentation() {
               <li>
                 After the first run you can choose <strong>Same events</strong> to measure further edits against the
                 events already collected.
+              </li>
+              <li>
+                <strong>Write up change</strong> produces a Markdown summary of the result and the exact edits, to
+                paste into a ticket or change request.
               </li>
             </ul>
             <p>

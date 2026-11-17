@@ -8,11 +8,13 @@ import {
   Drawer,
   EmptyState,
   Progress,
+  Skeleton,
   Switch,
   Table,
   Tag,
   Text,
   TextArea,
+  Toast,
 } from '@capra/core';
 import { ArrowUpRightFromSquare, Play } from '@capra/icons';
 import { Page } from '../components/Page';
@@ -59,6 +61,8 @@ interface TestRow {
   currentUs?: number;
   editedUs?: number;
   deltaUs?: number;
+  /** The difference is smaller than the variation between runs of the same version. */
+  withinNoise?: boolean;
   currentIn?: number;
   editedIn?: number;
 }
@@ -84,6 +88,74 @@ function changesOf(draft: DraftFn, original: FnConf): string[] {
 
 const signed = (n: number, text: string) => (n > 0 ? `+${text}` : text);
 
+/** The saved functions with one moved in front of another, as a recommendation link asks for (`from:to`). */
+function initialDraft(original: FnConf[], move: string | null): DraftFn[] {
+  const draft: DraftFn[] = original.map((fn, origin) => ({ origin, fn }));
+  const [from, to] = (move ?? '').split(':').map(Number);
+  if (!Number.isInteger(from) || !Number.isInteger(to) || !draft[from] || !draft[to] || from === to) return draft;
+  const [item] = draft.splice(from, 1);
+  draft.splice(draft.findIndex((d) => d.origin === to), 0, { ...item, moved: true });
+  return draft;
+}
+
+/** A write-up of the tested change that someone can review before making it in Cribl. */
+function buildProposal(args: {
+  name: string;
+  groupId: string;
+  result: Result;
+  rows: TestRow[];
+  draft: DraftFn[];
+  original: FnConf[];
+  inEvents: number | undefined;
+  noise: number;
+}): string {
+  const { name, groupId, result, rows, draft, original, inEvents, noise } = args;
+  const cur = (result.current.totalMs * 1000) / result.events;
+  const ed = (result.edited.totalMs * 1000) / result.events;
+  const delta = cur > 0 ? (ed - cur) / cur : 0;
+  const real = Math.abs(delta) > noise;
+  const lines = [
+    `# Proposed change to pipeline ${name}`,
+    '',
+    `Worker Group: ${groupId}`,
+    `Tested: ${fmtDateTime(result.at)}`,
+    `Events: ${result.sourceName}, ${fmtInt(result.sourceEvents)} events${result.repeated ? `, repeated to ${fmtInt(result.events)}` : ', each run once'}`,
+    '',
+    '## Result',
+    '',
+    `- Cost per event: ${fmtMicros(cur)} µs now, ${fmtMicros(ed)} µs with the change (${signed(delta, fmtPercent(delta))})${real ? '' : `. This is within the ${fmtPercent(noise)} variation between runs, so it is not a measurable change`}`,
+    ...(real && inEvents !== undefined
+      ? [`- Estimated CPU time saved: ${fmtSeconds((inEvents * (cur - ed)) / 1_000_000)} s over the ${fmtInt(inEvents)} events in the selected range`]
+      : []),
+    `- Output: ${
+      result.outputMatch === 'same'
+        ? `identical (${fmtInt(result.currentOut)} events)`
+        : result.outputMatch === 'different'
+          ? `DIFFERENT (${fmtInt(result.currentOut)} events now, ${fmtInt(result.editedOut)} with the change; first difference at event ${result.firstDifference?.position ?? '?'})`
+          : 'could not be compared, because the number of events changes between runs'
+    }${result.ignoredFields.length ? `. Not compared because they vary between runs: ${result.ignoredFields.join(', ')}` : ''}`,
+    '- Method: each version run 3 times, alternating, in the pipeline preview on the Leader; fastest whole run of each',
+    '',
+    '## Changes',
+    '',
+  ];
+  for (const d of draft) {
+    const before = original[d.origin];
+    const changes = changesOf(d, before);
+    if (!changes.length) continue;
+    const position = draft.indexOf(d) + 1;
+    lines.push(`### ${d.fn.id} (was #${d.origin + 1}${position === d.origin + 1 ? '' : `, now #${position}`}): ${changes.join(', ')}`, '');
+    if (changes.includes('Edited')) {
+      lines.push('Before:', '```json', JSON.stringify({ filter: before.filter ?? 'true', final: !!before.final, conf: before.conf ?? {} }, null, 2), '```');
+      lines.push('After:', '```json', JSON.stringify({ filter: d.fn.filter ?? 'true', final: !!d.fn.final, conf: d.fn.conf ?? {} }, null, 2), '```', '');
+    }
+  }
+  lines.push('## Cost by function (µs per event entering the pipeline)', '', '| # | Function | Now | With change |', '|---|---|---|---|');
+  for (const r of rows) lines.push(`| ${r.position} | ${r.type} | ${fmtMicros(r.currentUs)} | ${fmtMicros(r.editedUs)} |`);
+  lines.push('', '## Edited functions, in order', '', '```json', JSON.stringify(draft.map((d) => d.fn), null, 2), '```', '');
+  return lines.join('\n');
+}
+
 /** Edit a pipeline's functions in the app and measure the edit against the saved pipeline. */
 export function PipelineTest() {
   const { pipelineKey = '' } = useParams();
@@ -100,6 +172,11 @@ export function PipelineTest() {
   if (!conf || !row) {
     return (
       <Page title="Test a change" parents={parents}>
+        {isLoading && (
+          <div className="span-12">
+            <Skeleton loading title paragraph={{ rows: 6 }} />
+          </div>
+        )}
         {!isLoading && !error && (
           <div className="span-12">
             <EmptyState
@@ -129,7 +206,8 @@ function TestBench({ conf, row, name }: { conf: Pipeline; row: PipelineRow; name
   const { groups, groupId, samples, profiling } = useAppData();
   const [params, setParams] = useSearchParams();
   const original = useMemo(() => conf.conf.functions ?? [], [conf]);
-  const [draft, setDraft] = useState<DraftFn[]>(() => original.map((fn, origin) => ({ origin, fn })));
+  const [draft, setDraft] = useState<DraftFn[]>(() => initialDraft(original, params.get('move')));
+  const [proposalOpen, setProposalOpen] = useState(false);
   const [gathered, setGathered] = useState<GatheredEvents>();
   const [result, setResult] = useState<Result>();
   const [running, setRunning] = useState<{ label: string; percent: number }>();
@@ -239,6 +317,14 @@ function TestBench({ conf, row, name }: { conf: Pipeline; row: PipelineRow; name
           currentUs: cur ? currentUs : undefined,
           editedUs: ed ? editedUs : undefined,
           deltaUs: result && (cur || ed) ? editedUs! - currentUs! : undefined,
+          withinNoise:
+            result && (cur || ed)
+              ? Math.abs(editedUs! - currentUs!) <=
+                Math.max(
+                  perEvent(Math.max(cur?.noiseMs ?? 0, ed?.noiseMs ?? 0), result.events) ?? 0,
+                  MIN_NOISE * Math.max(currentUs!, editedUs!),
+                )
+              : undefined,
           currentIn: cur?.eventsIn,
           editedIn: ed?.eventsIn,
         };
@@ -279,7 +365,10 @@ function TestBench({ conf, row, name }: { conf: Pipeline; row: PipelineRow; name
         {
           id: 'deltaUs',
           label: 'Difference (µs per event)',
-          render: (v) => (v === undefined ? EMPTY : signed(v as number, fmtMicros(v as number))),
+          render: (v, item) =>
+            v === undefined
+              ? EMPTY
+              : `${signed(v as number, fmtMicros(v as number))}${item.withinNoise ? ', within noise' : ''}`,
         },
       ]),
     // `edit` only closes over URL params, which it re-reads on call
@@ -305,18 +394,21 @@ function TestBench({ conf, row, name }: { conf: Pipeline; row: PipelineRow; name
     <>
       <div className="span-12">
         <Text>
-          {`Edit the functions of ${name} here, then run the saved and edited versions against the same events to see what the edit is worth. Nothing on this page is saved to Cribl, and edits are lost when you leave it.`}
+          Edit a function, then compare it with the saved pipeline on the same events. Nothing here is saved to Cribl.
         </Text>
       </div>
 
       {result && (
         <>
           <div className="span-3">
-            <MetricCard label="Time per event, current" value={`${fmtMicros(currentUs)} µs`} />
+            <MetricCard
+              label="Cost per event, current"
+              value={`${fmtMicros(currentUs)} µs`}
+            />
           </div>
           <div className="span-3">
             <MetricCard
-              label="Time per event, edited"
+              label="Cost per event, edited"
               value={`${fmtMicros(editedUs)} µs`}
               note={
                 delta === undefined
@@ -400,6 +492,9 @@ function TestBench({ conf, row, name }: { conf: Pipeline; row: PipelineRow; name
             <Button variant="tertiary" disabled={!changed || !!running} onClick={resetAll}>
               Discard edits
             </Button>
+            <Button variant="secondary" disabled={!result || stale || !!running} onClick={() => setProposalOpen(true)}>
+              Write up change
+            </Button>
             <Button
               variant="primary"
               leadingIcon={Play}
@@ -424,14 +519,11 @@ function TestBench({ conf, row, name }: { conf: Pipeline; row: PipelineRow; name
               visibleColumns={[
                 'position',
                 'type',
-                'description',
+                ...(rows.some((r) => r.description) ? (['description'] as const) : []),
                 'state',
                 'changes',
-                'currentIn',
-                'editedIn',
-                'currentUs',
-                'editedUs',
-                'deltaUs',
+                // Comparison columns only mean something once there is a result.
+                ...(result ? (['currentIn', 'editedIn', 'currentUs', 'editedUs', 'deltaUs'] as const) : []),
               ]}
               items={rows}
             />
@@ -447,7 +539,7 @@ function TestBench({ conf, row, name }: { conf: Pipeline; row: PipelineRow; name
               <Card.Description>
                 {`${fmtDateTime(result.at)}. ${result.sourceName}: ${fmtInt(result.sourceEvents)} events${
                   result.repeated ? `, repeated to ${fmtInt(result.events)}` : ', each run once'
-                }. Each version ran 3 times, alternating, and the fastest time per function is kept.`}
+                }. Each version ran 3 times, alternating, and the fastest whole run of each is shown.`}
               </Card.Description>
             </Card.Header>
             <Card.Content>
@@ -517,6 +609,15 @@ function TestBench({ conf, row, name }: { conf: Pipeline; row: PipelineRow; name
         )}
       </Drawer>
 
+      <Drawer isOpen={proposalOpen} onClose={() => setProposalOpen(false)} title="Change proposal" width={640}>
+        {proposalOpen && result && groupId && (
+          <ProposalView
+            text={buildProposal({ name, groupId, result, rows, draft, original, inEvents: row.inEvents, noise })}
+            onClose={() => setProposalOpen(false)}
+          />
+        )}
+      </Drawer>
+
       <Drawer isOpen={runOpen} onClose={() => setRunOpen(false)} title="Run comparison" width={520}>
         {runOpen && (
           <RunForm
@@ -528,6 +629,35 @@ function TestBench({ conf, row, name }: { conf: Pipeline; row: PipelineRow; name
         )}
       </Drawer>
     </>
+  );
+}
+
+function ProposalView({ text, onClose }: { text: string; onClose: () => void }) {
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      Toast.success('Copied the proposal.');
+    } catch {
+      // The app's sandbox may not allow clipboard access.
+      Toast.info('Copying is not allowed here. Select the text and copy it yourself.');
+    }
+  };
+  return (
+    <div className="drawer-stack">
+      <Text>
+        A Markdown summary of the test and the exact edits, to paste into a ticket or change request. Nothing has
+        been changed in Cribl: someone still has to make these edits to the pipeline.
+      </Text>
+      <CodeBlock>{text}</CodeBlock>
+      <div className="drawer-footer">
+        <Button variant="tertiary" onClick={onClose}>
+          Close
+        </Button>
+        <Button variant="primary" onClick={() => void copy()}>
+          Copy
+        </Button>
+      </div>
+    </div>
   );
 }
 

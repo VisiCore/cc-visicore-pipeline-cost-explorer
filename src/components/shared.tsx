@@ -1,5 +1,6 @@
 import { Card, Tag, Text, type TagColor } from '@capra/core';
 import type { Severity } from '../lib/types';
+import type { Rating } from '../lib/recommend';
 import { EMPTY } from '../lib/format';
 
 const SEVERITY_COLOR: Record<Severity, TagColor> = { high: 'danger', medium: 'warning', low: 'info' };
@@ -15,16 +16,42 @@ export function SeverityTag({ severity, count }: { severity: Severity | 'none'; 
   );
 }
 
+const RATING_COLOR: Record<Rating, TagColor> = {
+  inefficient: 'danger',
+  review: 'warning',
+  efficient: 'success',
+  unmeasured: 'default',
+  idle: 'default',
+};
+export const RATING_LABEL: Record<Rating, string> = {
+  inefficient: 'Inefficient',
+  review: 'Review',
+  efficient: 'Efficient',
+  unmeasured: 'Not measured',
+  idle: 'No traffic',
+};
+
+export function RatingTag({ rating }: { rating: Rating }) {
+  return (
+    <Tag size="sm" color={RATING_COLOR[rating]}>
+      {RATING_LABEL[rating]}
+    </Tag>
+  );
+}
+
 export function MetricCard({
   label,
   value,
   note,
   noteColor,
+  hint,
   drill,
 }: {
   label: string;
   value: string;
   note?: string;
+  /** One line under the value saying what the number means or how it was worked out. */
+  hint?: string;
   noteColor?: TagColor;
   /** When set, the label becomes a control that opens the list behind the number. */
   drill?: { label: string; onClick: () => void };
@@ -51,6 +78,11 @@ export function MetricCard({
                 {note}
               </Tag>
             </div>
+          )}
+          {hint && (
+            <Text variant="body-sm-normal" color="subtle">
+              {hint}
+            </Text>
           )}
         </div>
       </Card.Content>

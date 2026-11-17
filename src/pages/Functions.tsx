@@ -50,14 +50,14 @@ export function Functions() {
   const resetPage = () => setPage(1);
 
   // Lead with measured cost once any exists; until then, lead with the most severe findings.
-  const hasMeasurements = functionRows.some((f) => f.usPerEvent !== undefined);
+  const hasMeasurements = functionRows.some((f) => f.usPerPipelineEvent !== undefined);
   const hasCpu = functionRows.some((f) => (f.cpuSeconds ?? 0) > 0);
   const effectiveSort: Sort =
     sort ??
     (hasCpu
       ? { column: 'cpuSeconds', direction: 'descending' }
       : hasMeasurements
-        ? { column: 'usPerEvent', direction: 'descending' }
+        ? { column: 'usPerPipelineEvent', direction: 'descending' }
         : { column: 'severityRank', direction: 'descending' });
 
   const selectedId = params.get('fn');
@@ -175,8 +175,8 @@ export function Functions() {
             ),
         },
         {
-          id: 'usPerEvent',
-          label: 'Time per event (µs)',
+          id: 'usPerPipelineEvent',
+          label: 'Cost per event (µs)',
           allowsSorting: true,
           render: (v) => fmtMicros(v as number | undefined),
         },
@@ -329,7 +329,7 @@ export function Functions() {
                   'position',
                   'severityRank',
                   'findingCount',
-                  'usPerEvent',
+                  'usPerPipelineEvent',
                   'share',
                   'cpuSeconds',
                 ]}

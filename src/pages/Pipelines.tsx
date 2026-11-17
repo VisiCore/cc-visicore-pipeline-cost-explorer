@@ -15,17 +15,28 @@ import {
 } from '@capra/core';
 import { FilterOutlined, Play } from '@capra/icons';
 import { Page } from '../components/Page';
-import { clampPage, CodeBlock, MetricCard, sortRows, type Sort } from '../components/shared';
+import { clampPage, CodeBlock, MetricCard, RatingTag, sortRows, type Sort } from '../components/shared';
 import { useAppData, type PipelineRow, type ProfileRequest } from '../state/AppData';
 import { CAPTURE_SECONDS } from '../lib/api';
-import { EMPTY, fmtDateTime, fmtInt, fmtMicros, fmtPercent, fmtSeconds } from '../lib/format';
+import { EMPTY, fmtAge, fmtCoreShare, fmtInt, fmtMicros, fmtPercent, fmtSeconds } from '../lib/format';
 import { listQuery, pipelineHref, useParamList } from '../lib/useParamList';
 
 const PAGE_SIZE = 25;
 
 export function Pipelines() {
-  const { isLoading, error, pipelineRows, samplesError, trafficError, reload, profiling, runProfiles, profiledCount } =
-    useAppData();
+  const {
+    isLoading,
+    error,
+    pipelineRows,
+    samplesError,
+    trafficError,
+    trafficUnknown,
+    rangeSeconds,
+    reload,
+    profiling,
+    runProfiles,
+    profiledCount,
+  } = useAppData();
   const navigate = useNavigate();
   // Toggle filters live in the URL so Overview can link straight to a filtered list.
   const [show, setShow] = useParamList('show');
@@ -34,9 +45,11 @@ export function Pipelines() {
   const unprofiledOnly = show.includes('unprofiled');
   const profiledOnly = show.includes('profiled');
   const discardedOnly = show.includes('discarded');
+  const inefficientOnly = show.includes('inefficient');
   const toggle = (flag: string, excludes?: string) =>
     setShow(show.includes(flag) ? show.filter((f) => f !== flag) : [...show.filter((f) => f !== excludes), flag]);
-  const [sort, setSort] = useState<Sort | undefined>({ column: 'inEvents', direction: 'descending' });
+  // Least efficient first, costliest within each rating, so the first screen is the pipelines to act on.
+  const [sort, setSort] = useState<Sort | undefined>({ column: 'ratingScore', direction: 'descending' });
   const [pageState, setPage] = useState(1);
   const [batchOpen, setBatchOpen] = useState(false);
 
@@ -48,10 +61,11 @@ export function Pipelines() {
         (!trafficOnly || (p.inEvents ?? 0) > 0) &&
         (!unprofiledOnly || p.profiledAt === undefined) &&
         (!profiledOnly || p.profiledAt !== undefined) &&
-        (!discardedOnly || ((p.discardedShare ?? 0) >= 0.5 && p.functionCount > 0)),
+        (!discardedOnly || ((p.discardedShare ?? 0) >= 0.5 && p.functionCount > 0)) &&
+        (!inefficientOnly || p.rating === 'inefficient' || p.rating === 'review'),
     );
     return sortRows(rows, sort);
-  }, [pipelineRows, filter, trafficOnly, unprofiledOnly, profiledOnly, discardedOnly, sort]);
+  }, [pipelineRows, filter, trafficOnly, unprofiledOnly, profiledOnly, discardedOnly, inefficientOnly, sort]);
 
   // Rows can disappear under the current page (group switch, a filter that profiling empties).
   const page = clampPage(pageState, filtered.length, PAGE_SIZE);
@@ -85,11 +99,36 @@ export function Pipelines() {
           label: 'Pipeline',
           allowsSorting: true,
           render: (_v, item) => (
-            <Link href={pipelineHref(item.id)}>{item.name}</Link>
+            <div className="name-cell">
+              <Link href={pipelineHref(item.id)}>{item.name}</Link>
+              {item.pack && (
+                <Text variant="body-sm-normal" color="subtle">
+                  {item.pack}
+                </Text>
+              )}
+            </div>
           ),
         },
-        { id: 'pack', label: 'Pack', allowsSorting: true, render: (v) => (v as string) || EMPTY },
-        { id: 'functionCount', label: 'Functions', allowsSorting: true, render: (v) => fmtInt(v as number) },
+        {
+          id: 'ratingScore',
+          label: 'Rating',
+          allowsSorting: true,
+          render: (_v, item) => (item.functionCount === 0 ? EMPTY : <RatingTag rating={item.rating} />),
+        },
+        {
+          id: 'ratingReasons',
+          label: 'Why',
+          render: (_v, item) =>
+            item.ratingReasons.length === 0 ? (
+              EMPTY
+            ) : (
+              <span className="nowrap">
+                {item.ratingReasons.length === 1
+                  ? item.ratingReasons[0]
+                  : `${item.ratingReasons[0]} (+${item.ratingReasons.length - 1} more)`}
+              </span>
+            ),
+        },
         {
           id: 'findingCount',
           label: 'Findings',
@@ -107,7 +146,7 @@ export function Pipelines() {
         { id: 'outEvents', label: 'Events out', allowsSorting: true, render: (v) => fmtInt(v as number | undefined) },
         {
           id: 'usPerEvent',
-          label: 'Time per event (µs)',
+          label: 'Cost per event (µs)',
           allowsSorting: true,
           render: (v) => fmtMicros(v as number | undefined),
         },
@@ -123,18 +162,11 @@ export function Pipelines() {
           allowsSorting: true,
           render: (v) => fmtPercent(v as number | undefined),
         },
-        { id: 'sampleName', label: 'Sample', allowsSorting: true, render: (v) => (v as string) || EMPTY },
-        {
-          id: 'profileSource',
-          label: 'Profiled with',
-          allowsSorting: true,
-          render: (v) => (v as string) || EMPTY,
-        },
         {
           id: 'profiledAt',
-          label: 'Last profiled',
+          label: 'Profiled',
           allowsSorting: true,
-          render: (v) => fmtDateTime(v as number | undefined),
+          render: (v) => (v === undefined ? EMPTY : <span className="nowrap">{fmtAge(v as number)}</span>),
         },
       ]),
     [],
@@ -144,8 +176,8 @@ export function Pipelines() {
     <Page title="Pipelines">
       <div className="span-4">
         <MetricCard
-          label="Pipelines with traffic"
-          value={isLoading ? '--' : `${fmtInt(withTraffic)} of ${fmtInt(pipelineRows.length)}`}
+          label="Pipelines receiving events"
+          value={isLoading ? '--' : trafficUnknown ? 'Unknown' : `${fmtInt(withTraffic)} of ${fmtInt(pipelineRows.length)}`}
         />
       </div>
       <div className="span-4">
@@ -158,6 +190,7 @@ export function Pipelines() {
         <MetricCard
           label="Estimated CPU time, profiled pipelines"
           value={isLoading || withCpu.length === 0 ? '--' : `${fmtSeconds(totalCpu)} s`}
+          note={isLoading || withCpu.length === 0 ? undefined : fmtCoreShare(totalCpu, rangeSeconds)}
         />
       </div>
 
@@ -180,6 +213,14 @@ export function Pipelines() {
             checked={trafficOnly}
             onPress={() => {
               toggle('traffic');
+              resetPage();
+            }}
+          />
+          <BooleanPillter
+            label="Inefficient or to review"
+            checked={inefficientOnly}
+            onPress={() => {
+              toggle('inefficient');
               resetPage();
             }}
           />
@@ -258,16 +299,13 @@ export function Pipelines() {
               columns={columns}
               visibleColumns={[
                 'name',
-                'pack',
-                'functionCount',
+                'ratingScore',
+                'ratingReasons',
                 'findingCount',
                 'inEvents',
-                'outEvents',
                 'usPerEvent',
                 'cpuSeconds',
                 'discardedShare',
-                'sampleName',
-                'profileSource',
                 'profiledAt',
               ]}
               items={pageRows}
@@ -321,7 +359,7 @@ export function Pipelines() {
         <div className="drawer-stack">
           <Text>
             {captureCount > 0
-              ? `Pipelines are profiled one at a time. ${captureCount === batch.length ? 'Each' : `${fmtInt(captureCount)} of them`} first captures live events from the Workers for up to ${CAPTURE_SECONDS} seconds using the filter shown, which is built from the routes and Sources that feed the pipeline. If a capture comes back empty and the pipeline has a saved sample, the sample is used.`
+              ? `Pipelines are profiled one at a time. ${captureCount === batch.length ? 'Each' : `${fmtInt(captureCount)} of them`} first captures live events from the Workers for ${CAPTURE_SECONDS} seconds (longer for pipelines that keep state between events) using the filter shown, which is built from the routes and Sources that feed the pipeline. If a capture comes back empty and the pipeline has a saved sample, the sample is used.`
               : 'Pipelines are profiled one at a time with the saved sample shown. Samples were matched by name unless you chose one.'}
           </Text>
           <Text color="subtle">

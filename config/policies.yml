@@ -75,3 +75,9 @@ policies:
   # Per-pipeline event throughput (pipe.in_events / out_events / dropped_events)
   - object: '/system/metrics/query'
     actions: ['POST']
+  # Real CPU use is asked of each Worker directly. A Worker path is authorized against its
+  # group-equivalent path, so both are declared.
+  - object: '/w/*/system/metrics/query'
+    actions: ['POST']
+  - object: '/m/*/system/metrics/query'
+    actions: ['POST']

@@ -65,6 +65,8 @@ export interface FnProfile {
   eventsOut: number;
   bytesIn: number;
   bytesOut: number;
+  /** How far apart this function's two fastest runs were, in ms: a measure of how repeatable the timing is. */
+  noiseMs?: number;
 }
 
 export interface PipelineProfile {
@@ -76,6 +78,8 @@ export interface PipelineProfile {
   sourceEvents?: number;
   events: number;
   totalMs: number;
+  /** How far apart the two fastest whole runs were, as a ratio of the fastest. */
+  spread?: number;
   at: number;
   functions: FnProfile[];
 }
@@ -120,14 +124,26 @@ export interface Fate {
   paths: FatePath[];
   /** Share of this pipeline's downstream events that are discarded, 0–1. */
   discardedShare: number;
+  /** True when some paths carry an unknown volume, so the share covers only the measured ones. */
+  incomplete?: boolean;
 }
 
 /** Worker capacity and measured load for a group over the selected time range. */
 export interface WorkerLoad {
   workers: number;
   cores: number;
-  /** Average number of cores' worth of runnable work across the group's Workers (sum of load averages). */
-  busyCores: number;
+  /**
+   * Sum of the Workers' average load averages: processes running or waiting to run (on Linux, also
+   * those waiting on disk). Undefined when no load samples were reported.
+   */
+  busyCores?: number;
+  /**
+   * CPU used by the Cribl worker processes, in cores, averaged over the range and summed across the
+   * Workers that answered. Undefined when no Worker could be asked.
+   */
+  criblCores?: number;
+  /** How many Workers `criblCores` covers. */
+  cpuWorkers?: number;
 }
 
 /** A Source, as far as it decides which pipeline its events go through. */
