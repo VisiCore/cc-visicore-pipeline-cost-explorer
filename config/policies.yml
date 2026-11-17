@@ -1,0 +1,77 @@
+# Product API access declaration. The app runs in policiesOnly (Strict) mode, so every Cribl API
+# path it calls must be listed here. All access is read-only except two POSTs that do not modify
+# configuration: a metrics aggregation query and a pipeline preview (runs sample events through a
+# pipeline in a sandboxed process on the Leader; nothing is sent to Destinations).
+policies:
+  # Worker Group / Fleet picker
+  - object: '/master/groups'
+    actions: ['GET']
+  # The list is filtered to the groups the app can read individually, so the child path is required too.
+  - object: '/master/groups/*'
+    actions: ['GET']
+
+  # Pipeline inventory (group pipelines + pipelines inside Packs). The `/*` child paths are required even
+  # though the app only calls the list endpoints: lists are filtered to the items the app can read.
+  - object: '/m/*/pipelines'
+    actions: ['GET']
+  - object: '/m/*/pipelines/*'
+    actions: ['GET']
+  - object: '/m/*/packs'
+    actions: ['GET']
+  - object: '/m/*/packs/*'
+    actions: ['GET']
+  - object: '/m/*/p/*/pipelines'
+    actions: ['GET']
+  - object: '/m/*/p/*/pipelines/*'
+    actions: ['GET']
+
+  # Saved sample files used as profiling input
+  - object: '/m/*/system/samples'
+    actions: ['GET']
+  - object: '/m/*/system/samples/*'
+    actions: ['GET']
+  # Samples that ship inside a Pack, offered when profiling that Pack's pipelines
+  - object: '/m/*/p/*/system/samples'
+    actions: ['GET']
+  - object: '/m/*/p/*/system/samples/*'
+    actions: ['GET']
+
+  # Route tables (group and Pack), read to work out which live events reach a pipeline
+  - object: '/m/*/routes'
+    actions: ['GET']
+  - object: '/m/*/routes/*'
+    actions: ['GET']
+  - object: '/m/*/p/*/routes'
+    actions: ['GET']
+  - object: '/m/*/p/*/routes/*'
+    actions: ['GET']
+
+  # Sources, read for pipelines attached to them directly (pre-processing and QuickConnect)
+  - object: '/m/*/system/inputs'
+    actions: ['GET']
+  - object: '/m/*/system/inputs/*'
+    actions: ['GET']
+
+  # Destinations, read for their type, to find pipelines whose output is sent to DevNull
+  - object: '/m/*/system/outputs'
+    actions: ['GET']
+  - object: '/m/*/system/outputs/*'
+    actions: ['GET']
+
+  # Worker Nodes, read for core counts, to compare estimated pipeline cost with Worker load
+  - object: '/master/workers'
+    actions: ['GET']
+  - object: '/master/workers/*'
+    actions: ['GET']
+
+  # Live capture: taps events arriving from Sources for a few seconds as profiling input. Read-only.
+  - object: '/m/*/system/capture'
+    actions: ['POST']
+
+  # Per-function timings: pipeline preview with CPU profiling (mode: pipe)
+  - object: '/m/*/preview'
+    actions: ['POST']
+
+  # Per-pipeline event throughput (pipe.in_events / out_events / dropped_events)
+  - object: '/system/metrics/query'
+    actions: ['POST']

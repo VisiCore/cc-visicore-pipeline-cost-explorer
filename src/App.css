@@ -1,0 +1,354 @@
+:root {
+  color-scheme: light dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background-color: token('color.background.application');
+  color: token('color.foreground.default');
+}
+
+/* ---------- Shell ---------- */
+
+.app-shell {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  height: 100%;
+}
+
+.app-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.page-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Capra 12-column grid: fluid columns, 16px gutters, 16px inline padding. */
+.page-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: token('spacing.lg');
+  padding-inline: token('spacing.lg');
+  padding-block: token('spacing.lg');
+  align-items: start;
+}
+
+.span-3 {
+  grid-column: span 3;
+}
+
+.span-4 {
+  grid-column: span 4;
+}
+
+.span-6 {
+  grid-column: span 6;
+}
+
+.span-12 {
+  grid-column: span 12;
+}
+
+@media (max-width: 1100px) {
+  .span-3,
+  .span-4 {
+    grid-column: span 6;
+  }
+
+  .span-6 {
+    grid-column: span 12;
+  }
+}
+
+/* ---------- Page header controls ---------- */
+
+.header-controls {
+  display: flex;
+  align-items: center;
+  gap: token('spacing.sm');
+}
+
+.header-group {
+  width: 220px;
+}
+
+.header-range {
+  width: 160px;
+}
+
+/* ---------- Cards ---------- */
+
+.metric-card {
+  display: flex;
+  flex-direction: column;
+  gap: token('spacing.xs');
+}
+
+.rank-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rank-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: token('spacing.lg');
+  padding-block: token('spacing.sm');
+  border-bottom: token('border.default');
+}
+
+.rank-row:last-child {
+  border-bottom: none;
+}
+
+.rank-row-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.rank-row-finding {
+  min-width: 0;
+}
+
+.rank-row-value {
+  text-align: end;
+  white-space: nowrap;
+}
+
+/* ---------- Filter bar (Filtering Pattern: simple) ---------- */
+
+.filter-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: token('spacing.sm');
+  padding: token('spacing.sm') 0;
+}
+
+.filter-input {
+  width: 260px;
+}
+
+.filter-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: token('spacing.lg');
+  margin-inline-start: auto;
+}
+
+/* Link that leaves the app for the Cribl UI. */
+.external-link {
+  display: inline-flex;
+  align-items: center;
+  gap: token('spacing.xs');
+  color: token('color.foreground.link');
+  text-decoration: none;
+}
+
+.external-link:hover {
+  text-decoration: underline;
+}
+
+.external-link:focus-visible {
+  outline: token('border.focus');
+  outline-offset: 2px;
+}
+
+.table-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding-block: token('spacing.md');
+}
+
+.profiling-bar {
+  display: flex;
+  align-items: center;
+  gap: token('spacing.lg');
+  padding: token('spacing.md') token('spacing.lg');
+  border: token('border.default');
+  border-radius: token('radius.md');
+  background-color: token('color.background.surface');
+}
+
+.profiling-bar-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: token('spacing.xs');
+  min-width: 0;
+}
+
+/* ---------- Drawers ---------- */
+
+.drawer-stack {
+  display: flex;
+  flex-direction: column;
+  gap: token('spacing.xl');
+}
+
+.drawer-section {
+  display: flex;
+  flex-direction: column;
+  gap: token('spacing.sm');
+}
+
+.drawer-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: token('spacing.sm');
+}
+
+.detail-list {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: token('spacing.sm') token('spacing.xl');
+  margin: 0;
+}
+
+.detail-list dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.finding {
+  display: flex;
+  flex-direction: column;
+  gap: token('spacing.xs');
+  padding: token('spacing.md');
+  border: token('border.default');
+  border-radius: token('radius.md');
+}
+
+.finding-head {
+  display: flex;
+  align-items: center;
+  gap: token('spacing.sm');
+}
+
+.code-block {
+  display: block;
+  margin: 0;
+  padding: token('spacing.md');
+  border: token('border.default');
+  border-radius: token('radius.md');
+  background-color: token('color.background.neutral.default');
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ---------- Documentation (Built in Doc template) ---------- */
+
+.doc-reading {
+  grid-column: span 9;
+  max-width: 900px;
+}
+
+.doc-toc {
+  grid-column: span 3;
+  position: sticky;
+  top: token('spacing.lg');
+  width: 240px;
+  justify-self: end;
+}
+
+@media (max-width: 1100px) {
+  .doc-reading {
+    grid-column: span 12;
+  }
+
+  .doc-toc {
+    display: none;
+  }
+}
+
+/* Link-styled native button for controls that open a drawer instead of navigating. */
+.link-button {
+  padding: 0;
+  border: none;
+  background: none;
+  color: token('color.foreground.link');
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.link-button:hover {
+  text-decoration: underline;
+}
+
+.link-button:focus-visible {
+  outline: token('border.focus');
+  outline-offset: 2px;
+}
+
+/* Grid children may shrink below their content width; wide tables scroll inside their own box. */
+.page-grid > * {
+  min-width: 0;
+}
+
+.app-shell,
+.app-main {
+  overflow: hidden;
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+/* Batch confirmation: one pipeline per block, with what it will be profiled against underneath. */
+.batch-list {
+  display: flex;
+  flex-direction: column;
+  gap: token('spacing.xs');
+  margin: 0;
+}
+
+.batch-list dt {
+  margin-top: token('spacing.md');
+}
+
+.batch-list dd {
+  display: flex;
+  flex-direction: column;
+  gap: token('spacing.xs');
+  margin: 0;
+}
+
+/* ---------- Test a change ---------- */
+
+.compare-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: token('spacing.lg');
+}
+
+.switch-row {
+  display: flex;
+  align-items: center;
+  gap: token('spacing.sm');
+}
+
+.button-row {
+  display: flex;
+  gap: token('spacing.sm');
+}
