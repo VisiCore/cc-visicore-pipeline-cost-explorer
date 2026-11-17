@@ -18,7 +18,7 @@ function App() {
       <Toast.Provider />
       <AppDataProvider>
         <div className="app-shell">
-          <VerticalNavigation aria-label="Function Profiler navigation">
+          <VerticalNavigation aria-label="Pipeline Cost Explorer navigation">
             <VerticalNavigation.ItemList>
               <VerticalNavigation.Item
                 as={RouterLink}

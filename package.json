@@ -1,5 +1,5 @@
 {
-  "name": "resources",
+  "name": "pipeline-cost-explorer",
   "private": true,
   "version": "1.0.0",
   "type": "module",
@@ -29,7 +29,7 @@
     "typescript": "~7.0.2",
     "vite": "^8.3.6"
   },
-  "displayName": "Function Profiler",
+  "displayName": "Pipeline Cost Explorer",
   "cribl": {
     "type": "app",
     "appAuthMode": "policiesOnly",
@@ -41,5 +41,5 @@
       "edge"
     ]
   },
-  "description": "Find inefficient and resource-heavy functions in the pipelines of a Worker Group."
+  "description": "Find what your pipelines cost: slow functions, wasted work, and the effect of a change before you make it."
 }

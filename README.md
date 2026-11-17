@@ -1,10 +1,10 @@
-# Function Profiler
+# Pipeline Cost Explorer
 
 Find the functions in your pipelines that are inefficient or that use the most processing time.
 
 ## Summary
 
-Function Profiler is a Cribl app for pipeline performance review. It helps you see which functions cost the most CPU given real traffic, spot configuration patterns that are commonly slow, and decide where optimization effort pays off.
+Pipeline Cost Explorer is a Cribl app for pipeline performance review. It helps you see which functions cost the most CPU given real traffic, spot configuration patterns that are commonly slow, and decide where optimization effort pays off.
 
 ## What This App Does
 

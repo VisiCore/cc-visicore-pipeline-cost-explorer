@@ -8,9 +8,9 @@ export function Documentation() {
       <div className="page-grid doc-grid">
         <div className="doc-reading">
           <Prose as="article" ref={contentRef}>
-            <h1>Function Profiler</h1>
+            <h1>Pipeline Cost Explorer</h1>
             <p>
-              Function Profiler finds the functions in a Worker Group's pipelines that are inefficient or that consume
+              Pipeline Cost Explorer finds the functions in a Worker Group's pipelines that are inefficient or that consume
               the most processing time. It combines three sources: the pipeline configuration, measured per-function
               timings from pipeline preview, and per-pipeline event counts from Cribl's internal metrics.
             </p>
