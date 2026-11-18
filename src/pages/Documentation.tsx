@@ -44,12 +44,12 @@ export function Documentation() {
             <ul>
               <li>
                 <strong>Inefficient</strong> means there is measured evidence of wasted work: most of its output is
-                discarded downstream, it costs 50 µs or more per event, a Drop or Regex Filter removes events after
+                discarded downstream, it costs 50 µs or more per event (adjustable), a Drop or Regex Filter removes events after
                 a fifth or more of the pipeline's work has been done on them, or a function with a high-severity
                 configuration finding takes a quarter or more of the pipeline's time.
               </li>
               <li>
-                <strong>Review</strong> means something is worth a look: 15 µs or more per event, a smaller saving
+                <strong>Review</strong> means something is worth a look: 15 µs or more per event (adjustable), a smaller saving
                 from moving a function earlier, or a medium or high configuration finding.
               </li>
               <li>
@@ -62,6 +62,23 @@ export function Documentation() {
             <p>
               A rating says how well a pipeline does its work, not how much it matters. A pipeline rated
               Inefficient that handles few events costs little; the CPU time column shows what is at stake.
+            </p>
+
+            <p>
+              How strictly cost is judged is set on the <strong>Settings</strong> page and applies to everyone who
+              uses the app. Choose Strict, Standard, or Lenient by what your pipelines are meant to do, or set
+              your own figures. The page shows each cost as the events one core could process per second at that
+              cost (50 µs per event is 20,000 events per second), and lists your profiled pipelines with the
+              rating each would get, so you can see the effect before saving.
+            </p>
+
+            <h3>Time range</h3>
+            <p>
+              Event counts and CPU time cover the range in the page header. The buttons set the common ranges.
+              Selecting the arrow beside the range opens the picker, where you can choose another quick range,
+              enter a relative range such as <code>-90m</code> to <code>now</code> (add <code>@h</code> or{' '}
+              <code>@d</code> to snap to the start of the hour or day), or pick exact start and end times. The
+              Leader only keeps metrics for a limited period, so a range further back than that comes back empty.
             </p>
 
             <h3>Top fixes</h3>

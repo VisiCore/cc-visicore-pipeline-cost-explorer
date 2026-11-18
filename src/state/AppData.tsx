@@ -15,7 +15,18 @@ import {
   listSamples,
 } from '../lib/api';
 import { computeFates } from '../lib/fate';
-import { ratePipeline, RATING_RANK, recommend, suggestMove, type Rating, type Recommendation } from '../lib/recommend';
+import {
+  DEFAULT_THRESHOLDS,
+  ratePipeline,
+  RATING_RANK,
+  recommend,
+  suggestMove,
+  validThresholds,
+  type Rating,
+  type Recommendation,
+  type Thresholds,
+} from '../lib/recommend';
+import { DEFAULT_RANGE, normalizeRange, resolveRange, type TimeRange } from '../lib/timeRange';
 import { analyzePipeline, measuredFindings, SEVERITY_RANK, topSeverity } from '../lib/analysis';
 import {
   capturePlanFor,
@@ -36,7 +47,6 @@ import type {
   Output,
   Pipeline,
   PipelineProfile,
-  RangeKey,
   Route,
   RouteTraffic,
   Sample,
@@ -45,13 +55,6 @@ import type {
   WorkerLoad,
 } from '../lib/types';
 
-export const RANGES: { key: RangeKey; ms: number }[] = [
-  { key: '1h', ms: 3_600_000 },
-  { key: '6h', ms: 6 * 3_600_000 },
-  { key: '12h', ms: 12 * 3_600_000 },
-  { key: '24h', ms: 24 * 3_600_000 },
-  { key: '7d', ms: 7 * 24 * 3_600_000 },
-];
 
 export interface FunctionRow {
   [key: string]: unknown;
@@ -144,8 +147,12 @@ interface AppData {
   groups: Group[];
   groupId?: string;
   setGroupId: (id: string) => void;
-  range: RangeKey;
-  setRange: (range: RangeKey) => void;
+  range: TimeRange;
+  setRange: (range: TimeRange) => void;
+  /** Per-event costs that decide a pipeline's rating. Shared by everyone using the app. */
+  thresholds: Thresholds;
+  /** Saves new thresholds; resolves false when they could not be stored. */
+  saveThresholds: (next: Thresholds) => Promise<boolean>;
   isLoading: boolean;
   error?: string;
   warnings: string[];
@@ -185,7 +192,7 @@ export function useAppData(): AppData {
 
 interface Prefs {
   groupId?: string;
-  range?: RangeKey;
+  range?: unknown;
 }
 
 /** Fewer events than this through a function is too few to judge its per-event cost. */
@@ -196,7 +203,9 @@ const kvSafe = (s: string) => encodeURIComponent(s);
 export function AppDataProvider({ children }: { children: React.ReactNode }) {
   const [groups, setGroups] = useState<Group[]>([]);
   const [groupId, setGroupIdState] = useState<string>();
-  const [range, setRangeState] = useState<RangeKey>('24h');
+  const [range, setRangeState] = useState<TimeRange>(DEFAULT_RANGE);
+  const [thresholds, setThresholds] = useState<Thresholds>(DEFAULT_THRESHOLDS);
+  const rangeId = JSON.stringify(range);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string>();
   const [warnings, setWarnings] = useState<string[]>([]);
@@ -235,10 +244,16 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
         const user = await window.getCriblUser?.().catch(() => undefined);
         // User IDs can contain characters such as `|` that the KV store rejects in a key, even encoded.
         if (user?.id) userKey.current = user.id.replace(/[^A-Za-z0-9_-]/g, '_');
-        const [list, prefs] = await Promise.all([listGroups(), kvGet<Prefs>(`prefs/${userKey.current}`)]);
+        const [list, prefs, savedThresholds] = await Promise.all([
+          listGroups(),
+          kvGet<Prefs>(`prefs/${userKey.current}`),
+          kvGet<unknown>('settings/thresholds'),
+        ]);
         if (cancelled) return;
         setGroups(list);
-        if (prefs?.range && RANGES.some((r) => r.key === prefs.range)) setRangeState(prefs.range);
+        setThresholds(validThresholds(savedThresholds) ?? DEFAULT_THRESHOLDS);
+        const savedRange = normalizeRange(prefs?.range);
+        if (savedRange) setRangeState(savedRange);
         const initial =
           list.find((g) => g.id === prefs?.groupId) ?? list.find((g) => g.id === 'default') ?? list[0];
         if (initial) {
@@ -309,9 +324,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!groupId) return;
     let cancelled = false;
-    const ms = RANGES.find((r) => r.key === range)!.ms;
-    const latest = Date.now();
-    const earliest = latest - ms;
+    const { earliest, latest } = resolveRange(range) ?? resolveRange(DEFAULT_RANGE)!;
     getTraffic(groupId, earliest, latest)
       .then((t) => {
         if (cancelled) return;
@@ -338,7 +351,9 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [groupId, range, reloadTick]);
+    // `rangeId` stands in for `range`, which is a new object on every change of the same value.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groupId, rangeId, reloadTick]);
 
   // A Pack pipeline's capture filter needs that Pack's routes. Fetching them for every Pack would
   // double the startup requests, so only Packs with pipelines that are receiving events are loaded.
@@ -395,8 +410,8 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
   );
 
   const setRange = useCallback(
-    (next: RangeKey) => {
-      if (next === range) return;
+    (next: TimeRange) => {
+      if (JSON.stringify(next) === JSON.stringify(range) || !resolveRange(next)) return;
       setRangeState(next);
       // Don't show the old range's counts under the new range's label while the query runs.
       setTraffic({});
@@ -502,7 +517,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
         findings: fRows
           .filter((f) => f.pipelineKey === p.key && f.state === 'enabled')
           .flatMap((f) => f.findings.map((x) => ({ severity: x.severity, title: x.title, share: f.share }))),
-      });
+      }, thresholds);
       const usable = (s: Sample) => !s.pack || s.pack === p.pack;
       const chosen = samples.find((s) => s.key === sampleChoice[p.key] && usable(s));
       const guess = chosen ? undefined : matchSample(p, samples);
@@ -548,7 +563,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       profiledCount: profiled,
       recommendations: recommend({ pipelines, profiles: current, rows: pRows, functions: fRows }),
     };
-  }, [pipelines, traffic, profiles, samples, sampleChoice, routes, inputs, outputs, routeTraffic, packRoutes]);
+  }, [pipelines, traffic, profiles, samples, sampleChoice, routes, inputs, outputs, routeTraffic, packRoutes, thresholds]);
 
   const cancelProfiling = useCallback(() => abortRef.current?.abort(), []);
 
@@ -637,6 +652,19 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
     [groupId, pipelines, samples],
   );
 
+  const rangeSeconds = useMemo(() => {
+    const { earliest, latest } = resolveRange(range) ?? resolveRange(DEFAULT_RANGE)!;
+    return (latest - earliest) / 1000;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rangeId]);
+
+  const saveThresholds = useCallback(async (next: Thresholds) => {
+    const saved = await kvSet('settings/thresholds', next);
+    // Applied here either way, so the change is visible even if it could not be stored.
+    setThresholds(next);
+    return saved;
+  }, []);
+
   const value: AppData = {
     groups,
     groupId,
@@ -656,7 +684,9 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
     routes,
     inputs,
     workerLoad,
-    rangeSeconds: RANGES.find((r) => r.key === range)!.ms / 1000,
+    rangeSeconds,
+    thresholds,
+    saveThresholds,
     pipelineRows,
     functionRows,
     profiledCount,

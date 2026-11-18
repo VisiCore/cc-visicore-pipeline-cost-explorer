@@ -1,6 +1,6 @@
 import { Link as RouterLink, Route, Routes, useHref, useLocation, useNavigate } from 'react-router-dom';
 import { RouterProvider, Toast, VerticalNavigation } from '@capra/core';
-import { Book, Function as FunctionIcon, HomeOutlined, Pipeline as PipelineIcon } from '@capra/icons';
+import { Book, Cog, Function as FunctionIcon, HomeOutlined, Pipeline as PipelineIcon } from '@capra/icons';
 import { AppDataProvider } from './state/AppData';
 import { Overview } from './pages/Overview';
 import { Pipelines } from './pages/Pipelines';
@@ -8,6 +8,7 @@ import { PipelineDetail } from './pages/PipelineDetail';
 import { PipelineTest } from './pages/PipelineTest';
 import { Functions } from './pages/Functions';
 import { Documentation } from './pages/Documentation';
+import { Settings } from './pages/Settings';
 
 function App() {
   const navigate = useNavigate();
@@ -45,6 +46,13 @@ function App() {
             <VerticalNavigation.Footer>
               <VerticalNavigation.Item
                 as={RouterLink}
+                to="/settings"
+                label="Settings"
+                icon={<Cog />}
+                isActive={pathname.startsWith('/settings')}
+              />
+              <VerticalNavigation.Item
+                as={RouterLink}
                 to="/documentation"
                 label="Documentation"
                 icon={<Book />}
@@ -60,6 +68,7 @@ function App() {
               <Route path="/pipelines/:pipelineKey/test" element={<PipelineTest />} />
               <Route path="/functions" element={<Functions />} />
               <Route path="/documentation" element={<Documentation />} />
+              <Route path="/settings" element={<Settings />} />
               <Route path="*" element={<Overview />} />
             </Routes>
           </main>

@@ -261,8 +261,20 @@ export type Rating = 'inefficient' | 'review' | 'efficient' | 'unmeasured' | 'id
 export const RATING_RANK: Record<Rating, number> = { inefficient: 4, review: 3, unmeasured: 2, efficient: 1, idle: 0 };
 
 /** Per-event cost, in microseconds, above which a pipeline is worth a look, and above which it is clearly heavy. */
-const REVIEW_US = 15;
-const HEAVY_US = 50;
+export interface Thresholds {
+  reviewUs: number;
+  heavyUs: number;
+}
+
+export const DEFAULT_THRESHOLDS: Thresholds = { reviewUs: 15, heavyUs: 50 };
+
+/** Stored thresholds are only used when they make sense: positive, and review below heavy. */
+export function validThresholds(value: unknown): Thresholds | undefined {
+  const v = value as Partial<Thresholds> | null;
+  return typeof v?.reviewUs === 'number' && typeof v.heavyUs === 'number' && v.reviewUs > 0 && v.reviewUs < v.heavyUs
+    ? { reviewUs: v.reviewUs, heavyUs: v.heavyUs }
+    : undefined;
+}
 
 /**
  * Rates one pipeline. "Inefficient" means there is measured evidence of wasted work: output that is
@@ -279,13 +291,13 @@ export function ratePipeline(p: {
   move?: { share: number; what: string };
   /** Configuration findings on its functions: the finding, and that function's share of pipeline time. */
   findings: { severity: Severity; title: string; share?: number }[];
-}): { rating: Rating; reasons: string[] } {
+}, thresholds: Thresholds = DEFAULT_THRESHOLDS): { rating: Rating; reasons: string[] } {
   const busy = (p.inEvents ?? 0) > 0;
   const strong: string[] = [];
   const mild: string[] = [];
   if (busy && (p.discardedShare ?? 0) >= 0.5) strong.push('Output is discarded downstream');
-  if (p.usPerEvent !== undefined && p.usPerEvent >= HEAVY_US) strong.push(`${Math.round(p.usPerEvent)} µs per event`);
-  else if (p.usPerEvent !== undefined && p.usPerEvent >= REVIEW_US) mild.push(`${Math.round(p.usPerEvent)} µs per event`);
+  if (p.usPerEvent !== undefined && p.usPerEvent >= thresholds.heavyUs) strong.push(`${Math.round(p.usPerEvent)} µs per event`);
+  else if (p.usPerEvent !== undefined && p.usPerEvent >= thresholds.reviewUs) mild.push(`${Math.round(p.usPerEvent)} µs per event`);
   if (p.move && p.move.share >= 0.2) strong.push(`${p.move.what} removes events late`);
   else if (p.move && p.move.share >= 0.05) mild.push(`${p.move.what} removes events late`);
   const specific = p.findings.filter((f) => !MEASURED_ONLY.has(f.title) && f.severity !== 'low');

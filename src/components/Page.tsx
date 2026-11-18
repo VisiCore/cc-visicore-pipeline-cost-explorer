@@ -1,9 +1,12 @@
+import { useState } from 'react';
 import {
   Alert,
   Breadcrumb,
   Breadcrumbs,
   Button,
+  IconButton,
   PageHeader,
+  Popover,
   Progress,
   SelectField,
   Tag,
@@ -11,20 +14,16 @@ import {
   TextField,
   ToggleButtonGroup,
 } from '@capra/core';
-import { ClockOutlined } from '@capra/icons';
-import { RANGES, useAppData } from '../state/AppData';
-import type { RangeKey } from '../lib/types';
-
-const RANGE_NAMES: Record<RangeKey, string> = {
-  '1h': 'Last 1 hour',
-  '6h': 'Last 6 hours',
-  '12h': 'Last 12 hours',
-  '24h': 'Last 24 hours',
-  '7d': 'Last 7 days',
-};
+import { ChevronDown, ClockOutlined } from '@capra/icons';
+import { useAppData } from '../state/AppData';
+import { RangePicker } from './RangePicker';
+import { QUICK_RANGES, quickKey, quickRange, rangeLabel } from '../lib/timeRange';
 
 function HeaderControls() {
   const { groups, groupId, setGroupId, range, setRange } = useAppData();
+  // The picker has no way to be closed from inside, so applying a range remounts it shut.
+  const [pickerKey, setPickerKey] = useState(0);
+  const active = quickKey(range);
   return (
     <div className="header-controls">
       <div className="header-group">
@@ -38,26 +37,42 @@ function HeaderControls() {
           onChange={(key) => key !== null && setGroupId(String(key))}
         />
       </div>
-      <div className="header-range">
-        <TextField
-          aria-label="Time range"
-          size="sm"
-          readOnly
-          value={RANGE_NAMES[range]}
-          leadingSlot={<ClockOutlined />}
-        />
-      </div>
+      <Popover
+        key={pickerKey}
+        content={
+          <RangePicker
+            range={range}
+            onApply={(next) => {
+              setRange(next);
+              setPickerKey((k) => k + 1);
+            }}
+          />
+        }
+      >
+        <div className="header-range">
+          <div className={range.kind === 'absolute' ? 'header-range-field wide' : 'header-range-field'}>
+            <TextField
+              aria-label="Time range"
+              size="sm"
+              readOnly
+              value={rangeLabel(range)}
+              leadingSlot={<ClockOutlined />}
+            />
+          </div>
+          <IconButton icon={ChevronDown} aria-label="Change the time range" size="sm" variant="secondary" />
+        </div>
+      </Popover>
       <Tag>Local</Tag>
       <ToggleButtonGroup
         aria-label="Quick time ranges"
         size="sm"
-        disallowEmptySelection
-        selectedKeys={new Set([range])}
+        selectedKeys={new Set(active ? [active] : [])}
         onSelectionChange={(keys) => {
-          const next = [...keys][0] as RangeKey | undefined;
-          if (next) setRange(next);
+          const next = [...keys][0];
+          // Deselecting the active range is not a choice; a custom range leaves none selected.
+          if (next !== undefined) setRange(quickRange(String(next)));
         }}
-        items={RANGES.map((r) => ({ key: r.key, text: r.key }))}
+        items={QUICK_RANGES.map((token) => ({ key: token, text: token }))}
       />
     </div>
   );

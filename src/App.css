@@ -85,7 +85,18 @@ body {
 }
 
 .header-range {
-  width: 160px;
+  display: flex;
+  align-items: center;
+  gap: token('spacing.xs');
+}
+
+.header-range-field {
+  width: 170px;
+}
+
+/* An explicit range is two timestamps, so the field grows to show them. */
+.header-range-field.wide {
+  width: 330px;
 }
 
 /* ---------- Cards ---------- */
@@ -404,4 +415,78 @@ body {
 /* Short table text that should stay on one line. */
 .nowrap {
   white-space: nowrap;
+}
+
+/* ---------- Time range picker ---------- */
+
+.range-picker {
+  display: grid;
+  grid-template-columns: 220px 300px;
+  gap: token('spacing.xl');
+  padding: token('spacing.md');
+}
+
+.range-rail {
+  display: flex;
+  flex-direction: column;
+  gap: token('spacing.md');
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.range-group {
+  display: flex;
+  flex-direction: column;
+  gap: token('spacing.xs');
+}
+
+.range-row {
+  display: flex;
+  justify-content: space-between;
+  gap: token('spacing.md');
+  padding: token('spacing.xs') token('spacing.sm');
+  border: none;
+  border-radius: token('radius.md');
+  background: none;
+  color: token('color.foreground.default');
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.range-row:hover,
+.range-row:focus-visible {
+  background-color: token('color.background.neutral.default');
+}
+
+.range-token {
+  color: token('color.foreground.subtle');
+}
+
+.range-panel {
+  display: flex;
+  flex-direction: column;
+  gap: token('spacing.lg');
+}
+
+.range-footer {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: token('spacing.md');
+  margin-block-start: auto;
+}
+
+.range-zone {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------- Settings ---------- */
+
+.settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: token('spacing.xl');
+  max-width: 560px;
 }

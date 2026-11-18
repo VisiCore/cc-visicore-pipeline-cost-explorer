@@ -33,7 +33,7 @@ Pipeline Cost Explorer is a Cribl app for pipeline performance review. It helps 
 * Measured timings need events to run: either live traffic to capture, or a saved sample file (Processing, Knowledge, Sample Data). Configuration findings need neither.
 * Profiling runs on the Leader in the preview sandbox. Timings rank functions reliably against each other, but absolute values on Workers differ with hardware and load.
 * CPU time is an estimate, not a reading from the Workers. The Overview compares it with the CPU the Workers' Cribl processes report.
-* Ratings use fixed thresholds (15 and 50 µs per event) and say how well a pipeline does its work, not how much it matters. The CPU time beside each rating shows what is at stake.
+* Ratings use per-event cost thresholds (15 and 50 µs by default, adjustable on the Settings page) and say how well a pipeline does its work, not how much it matters. The CPU time beside each rating shows what is at stake.
 
 ## Permissions
 
@@ -56,7 +56,7 @@ It makes no external network calls.
 
 ## Data The App Stores
 
-Profile results, the sample chosen for each pipeline, and each user's last Worker Group and time range are kept in the app's own key-value store. Uninstalling the app removes them.
+Profile results, the sample chosen for each pipeline, the rating thresholds, and each user's last Worker Group and time range are kept in the app's own key-value store. Uninstalling the app removes them.
 
 ## Using The App
 

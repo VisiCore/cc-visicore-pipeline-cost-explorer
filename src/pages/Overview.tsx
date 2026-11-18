@@ -209,11 +209,15 @@ export function Overview() {
         <div className="span-12">
           <EmptyState
             illustration="Hibernating"
-            title="Measure your busiest pipelines"
-            description="Captures live events and runs them through Cribl's preview to time every function. Nothing is sent to Destinations."
+            title={trafficUnknown ? 'Nothing measured in this group yet' : 'Measure your busiest pipelines'}
+            description={
+              trafficUnknown
+                ? 'This group reports no event counts, so pipelines cannot be ranked by traffic. Open a pipeline and profile it with a saved sample or a capture filter of your own.'
+                : "Captures live events and runs them through Cribl's preview to time every function. Nothing is sent to Destinations."
+            }
           >
-            <Button variant="primary" size="sm" onClick={() => navigate(profilePath)}>
-              Profile pipelines
+            <Button variant="primary" size="sm" onClick={() => navigate(trafficUnknown ? '/pipelines' : profilePath)}>
+              {trafficUnknown ? 'View pipelines' : 'Profile pipelines'}
             </Button>
           </EmptyState>
         </div>

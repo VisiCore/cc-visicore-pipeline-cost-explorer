@@ -178,4 +178,3 @@ export interface CapturePlan {
   through?: { id: string; label: string; pack?: string; conf: PipelineConf };
 }
 
-export type RangeKey = '1h' | '6h' | '12h' | '24h' | '7d';
