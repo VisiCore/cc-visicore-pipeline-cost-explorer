@@ -98,6 +98,8 @@ export interface Route {
 export interface Output {
   id: string;
   type: string;
+  /** Post-processing pipeline, applied just before events are sent. */
+  pipeline?: string | null;
 }
 
 /** Events a route received from one Source over the selected time range. */
@@ -159,11 +161,21 @@ export interface Input {
 
 /**
  * Where to tap live events for a pipeline. Level 0 is as events leave the Source, before its
- * pre-processing pipeline; level 1 is after pre-processing, before routing.
+ * pre-processing pipeline; level 1 is after pre-processing, before routing; level 2 is after a
+ * processing pipeline has run, which is also where events sit between the stages of a Pack.
  */
 export interface CapturePlan {
   filter: string;
-  level: 0 | 1;
+  level: 0 | 1 | 2;
+  /** What kind of wiring the plan was worked out from, for explaining it. */
+  basis?: 'source' | 'route' | 'stage' | 'destination' | 'chain';
+  /** Tried when the first capture comes back empty. */
+  fallback?: { filter: string; level: 0 | 1 | 2 };
+  /**
+   * The pipeline is run from inside another one (a Chain function), so its events are whatever that
+   * pipeline has produced by then: the captured events are first run through these functions.
+   */
+  through?: { id: string; label: string; pack?: string; conf: PipelineConf };
 }
 
 export type RangeKey = '1h' | '6h' | '12h' | '24h' | '7d';

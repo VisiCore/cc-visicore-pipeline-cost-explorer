@@ -230,13 +230,25 @@ export function Documentation() {
                 the Source.
               </li>
               <li>For a Pack pipeline, whatever sends events into the Pack is combined with the Pack's own routes.</li>
+              <li>
+                A Pack route that depends on an earlier pipeline in the same Pack (its filter reads{' '}
+                <code>cribl_pipe</code> or <code>__packId</code>): events are captured between the two stages.
+              </li>
+              <li>
+                Destinations that use the pipeline for post-processing: events on the routes that send to those
+                Destinations, captured after the processing pipeline.
+              </li>
+              <li>
+                A Chain function in another pipeline: that pipeline's events are captured and run through its
+                functions up to the Chain, so they arrive as the chained pipeline really receives them.
+              </li>
             </ul>
             <p>Check the suggestion before running:</p>
             <ul>
               <li>It ignores route order and Final flags, so it can match events that an earlier route takes.</li>
               <li>
-                Nothing is suggested for pipelines attached only to a Destination. Enter an expression yourself,
-                such as a match on <code>__inputId</code>.
+                Nothing is suggested for a pipeline that only a Pack's own collector feeds. Enter an expression
+                yourself, such as a match on <code>__inputId</code>.
               </li>
               <li>A capture comes back empty if no matching events arrive within 10 seconds.</li>
             </ul>

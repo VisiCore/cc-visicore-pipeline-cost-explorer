@@ -44,14 +44,11 @@ export function MetricCard({
   value,
   note,
   noteColor,
-  hint,
   drill,
 }: {
   label: string;
   value: string;
   note?: string;
-  /** One line under the value saying what the number means or how it was worked out. */
-  hint?: string;
   noteColor?: TagColor;
   /** When set, the label becomes a control that opens the list behind the number. */
   drill?: { label: string; onClick: () => void };
@@ -78,11 +75,6 @@ export function MetricCard({
                 {note}
               </Tag>
             </div>
-          )}
-          {hint && (
-            <Text variant="body-sm-normal" color="subtle">
-              {hint}
-            </Text>
           )}
         </div>
       </Card.Content>

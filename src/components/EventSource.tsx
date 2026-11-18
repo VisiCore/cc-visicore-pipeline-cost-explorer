@@ -8,6 +8,19 @@ import type { CapturePlan, Route } from '../lib/types';
 
 type Kind = 'reuse' | 'capture' | 'sample';
 
+/** How a suggested capture filter was arrived at, in the user's terms. */
+export const CAPTURE_BASIS: Record<NonNullable<CapturePlan['basis']>, string> = {
+  source:
+    'Built from the Sources that use this pipeline for pre-processing. Events are captured as they leave the Source.',
+  route:
+    'Built from the routes and QuickConnect links that send to this pipeline. It ignores route order, so check it selects the events this pipeline really receives.',
+  stage:
+    'Built from the Pack route that runs this pipeline. That route depends on an earlier pipeline in the Pack, so events are captured between the two.',
+  destination:
+    'Built from the routes that send to the Destinations using this pipeline for post-processing. Events are captured after the processing pipeline.',
+  chain: 'Built from the pipeline whose Chain function runs this one. This filter selects that pipeline’s events.',
+};
+
 /** The events the user chose to measure with; undefined until the choice is complete. */
 export type EventChoice =
   | { kind: 'reuse' }
@@ -44,7 +57,9 @@ export function useEventSource(pipeline: PipelineRow, reuse?: ReusableEvents) {
     };
   }, [groupId, pipeline.pack]);
 
-  const plan = conf && packRoutes ? capturePlanFor(conf, routes, inputs, packRoutes) : undefined;
+  // The plan worked out with the whole group in view is the better one; the local one covers a Pack
+  // whose routes had not been loaded yet.
+  const plan = pipeline.capture ?? (conf && packRoutes ? capturePlanFor(conf, routes, inputs, packRoutes) : undefined);
   const suggested = plan?.filter;
   // An edited filter keeps the suggested tap point; with no suggestion, events are tapped before routing.
   const level = plan?.level ?? 1;
@@ -64,7 +79,11 @@ export function useEventSource(pipeline: PipelineRow, reuse?: ReusableEvents) {
       ? { kind: 'reuse' }
       : active === 'capture'
         ? filter.trim()
-          ? { kind: 'capture', plan: { filter: filter.trim(), level } }
+          ? {
+              kind: 'capture',
+              // An edited filter replaces the suggestion, including what would have been tried next.
+              plan: { ...plan, filter: filter.trim(), level, fallback: filterEdit === undefined ? plan?.fallback : undefined },
+            }
           : undefined
         : sampleKey
           ? { kind: 'sample', sampleKey }
@@ -84,6 +103,7 @@ export function useEventSource(pipeline: PipelineRow, reuse?: ReusableEvents) {
     setFilter: setFilterEdit,
     suggested,
     level,
+    plan,
     routesLoading: packRoutes === undefined,
     stateful: !!conf && isStateful(conf),
     choice,
@@ -91,7 +111,7 @@ export function useEventSource(pipeline: PipelineRow, reuse?: ReusableEvents) {
 }
 
 export function EventSourceFields({ source }: { source: ReturnType<typeof useEventSource> }) {
-  const { pipeline, reuse, kind, choices, samplesError, sampleKey, filter, filterEdited, suggested, level, stateful } =
+  const { pipeline, reuse, kind, choices, samplesError, sampleKey, filter, filterEdited, suggested, level, stateful, plan } =
     source;
   return (
     <>
@@ -128,16 +148,19 @@ export function EventSourceFields({ source }: { source: ReturnType<typeof useEve
             placeholder={source.routesLoading ? 'Loading routes' : "sourcetype=='my:data'"}
             helperText={
               !filterEdited && suggested
-                ? level === 0
-                  ? 'Built from the Sources that use this pipeline for pre-processing. Events are captured as they leave the Source.'
-                  : 'Built from the routes and QuickConnect links that send to this pipeline. It ignores route order, so check it selects the events this pipeline really receives.'
+                ? CAPTURE_BASIS[plan?.basis ?? (level === 0 ? 'source' : 'route')]
                 : !source.routesLoading && !suggested && !filterEdited
                   ? 'No enabled route or Source sends to this pipeline, so there is nothing to suggest. Enter an expression that selects its events, such as a Source or sourcetype match.'
-                  : `A JavaScript expression evaluated against each event ${level === 0 ? 'as it leaves the Source' : 'before routing'}.`
+                  : `A JavaScript expression evaluated against each event ${level === 0 ? 'as it leaves the Source' : level === 2 ? 'after a pipeline has processed it' : 'before routing'}.`
             }
             value={filter}
             onChange={(v) => source.setFilter(v)}
           />
+          {plan?.through && (
+            <Text color="subtle">
+              {`This pipeline is run from inside another one. The captured events are first run through ${plan.through.label}, so they arrive as this pipeline really receives them.`}
+            </Text>
+          )}
           <Text color="subtle">
             {stateful
               ? `Captures up to ${fmtInt(CAPTURE_MAX_EVENTS)} matching events from the Workers. This pipeline has functions that keep state between events, so each event is run once and a quiet pipeline is captured up to ${MAX_CAPTURES} times, ${CAPTURE_SECONDS} seconds each. Captured events are not saved.`

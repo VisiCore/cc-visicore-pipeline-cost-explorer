@@ -375,7 +375,13 @@ export function Pipelines() {
                   {!trafficError && p.capture ? (
                     <>
                       <Text color="subtle">
-                        {p.capture.level === 0 ? 'Live capture at the Source' : 'Live capture before routing'}
+                        {p.capture.through
+                          ? `Live capture, then run through ${p.capture.through.label}`
+                          : p.capture.level === 0
+                            ? 'Live capture at the Source'
+                            : p.capture.level === 2
+                              ? 'Live capture between pipeline stages'
+                              : 'Live capture before routing'}
                       </Text>
                       <CodeBlock>{p.capture.filter}</CodeBlock>
                       {p.sampleName && <Text color="subtle">{`If empty: ${p.sampleName}`}</Text>}

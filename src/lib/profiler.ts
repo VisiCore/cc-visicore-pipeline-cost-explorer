@@ -7,7 +7,7 @@ import {
   type PreviewStats,
 } from './api';
 import { isActive } from './analysis';
-import type { CapturePlan, FnProfile, Input, Pipeline, PipelineProfile, Route, Sample } from './types';
+import type { CapturePlan, FnProfile, Input, Output, Pipeline, PipelineProfile, Route, Sample } from './types';
 
 /** Events sent per preview run. More events amortize process start-up and JIT warm-up in the timings. */
 const TARGET_EVENTS = 1000;
@@ -118,14 +118,26 @@ export async function gatherEvents(
     source = await getSampleEvents(groupId, input.sample, signal);
     if (!source.length) throw new Error(`Sample "${input.sample.sampleName}" has no events`);
   } else {
-    source = await captureEvents(groupId, input.plan.filter, input.plan.level, signal);
+    let tap: { filter: string; level: 0 | 1 | 2 } = input.plan;
+    source = await captureEvents(groupId, tap.filter, tap.level, signal);
+    if (!source.length && input.plan.fallback) {
+      tap = input.plan.fallback;
+      source = await captureEvents(groupId, tap.filter, tap.level, signal);
+    }
     if (!source.length) throw new EmptyCaptureError();
     // Events can't be repeated for a stateful pipeline, so a quiet one is captured for longer instead.
     for (let n = 1; stateful && n < MAX_CAPTURES && source.length < TARGET_EVENTS; n++) {
-      const more = await captureEvents(groupId, input.plan.filter, input.plan.level, signal);
+      const more = await captureEvents(groupId, tap.filter, tap.level, signal);
       if (!more.length) break;
       source = source.concat(more);
     }
+  }
+  // A pipeline run by a Chain function receives what its caller has made of the events by then.
+  const through = input.kind === 'capture' ? input.plan.through : undefined;
+  if (through && (through.conf.functions ?? []).some((fn) => fn.id !== 'comment' && !fn.disabled)) {
+    const upstream: Pipeline = { key: through.id, id: through.id, pack: through.pack, conf: through.conf };
+    source = (await previewPipeline(groupId, upstream, buildEvents(source, false), signal)).items;
+    if (!source.length) throw new Error(`No events were left after running them through ${through.label}`);
   }
   const events = buildEvents(source, !stateful);
   return {
@@ -394,19 +406,38 @@ function fromInput(input: Input): string {
   return `(__inputId=='${id}' || __inputId.startsWith('${id}:'))`;
 }
 
+/** What `capturePlanFor` needs to follow a pipeline that nothing routes to directly. */
+export interface PlanContext {
+  pipelines: Pipeline[];
+  outputs: Output[];
+  /** Route tables of the Packs that have been loaded, keyed by Pack ID. */
+  packRoutes: Record<string, Route[]>;
+  /** Events each pipeline received, to prefer the busiest caller. */
+  traffic?: Record<string, { inEvents: number }>;
+}
+
+/** Fields an earlier pipeline in a Pack leaves on an event; a route that reads them runs after that pipeline. */
+const STAGE_FIELDS = /\b(cribl_pipe|__packId)\b/;
+const quote = (s: string) => `'${s.replace(/['\\]/g, '\\$&')}'`;
+
 /**
  * A capture plan that approximates the events a pipeline receives, worked out from how the pipeline
- * is wired in: routes that send to it, Sources that use it for pre-processing, and QuickConnect
- * links. For a Pack pipeline, whatever sends events into the Pack is combined with the Pack's own
- * routes. It ignores route order and Final flags, so it can match events an earlier route takes, and
- * it knows nothing about pipelines attached to Destinations. Returns undefined when nothing
- * references the pipeline.
+ * is wired in:
+ * - routes and QuickConnect links that send to it: tapped before routing;
+ * - Sources that use it for pre-processing: tapped at the Source;
+ * - a Pack route that depends on what an earlier pipeline in the Pack did: tapped between stages;
+ * - Destinations that use it for post-processing: tapped after the processing pipeline;
+ * - a Chain function in another pipeline: that pipeline's events, run through its functions up to the Chain.
+ * It ignores route order and Final flags, so it can match events an earlier route takes. Returns
+ * undefined when nothing references the pipeline.
  */
 export function capturePlanFor(
   pipeline: Pipeline,
   groupRoutes: Route[],
   inputs: Input[],
   packRoutes: Route[] = [],
+  ctx?: PlanContext,
+  depth = 0,
 ): CapturePlan | undefined {
   const live = inputs.filter((i) => !i.disabled);
   // Everything that delivers events to `target` after pre-processing: routes and QuickConnect links.
@@ -419,14 +450,101 @@ export function capturePlanFor(
   if (pipeline.pack) {
     const outer = into(`pack:${pipeline.pack}`);
     const inner = anyOf(packRoutes.filter((r) => !r.disabled && r.pipeline === pipeline.id).map((r) => r.filter));
-    if (!outer || !inner) return undefined;
-    const filter = outer === 'true' ? inner : inner === 'true' ? outer : `(${outer}) && (${inner})`;
-    return { filter, level: 1 };
+    if (inner && STAGE_FIELDS.test(inner)) {
+      // The route reads what an earlier pipeline in the Pack left behind, so the events only exist
+      // between stages. If that finds nothing, this may be the Pack's first stage after all.
+      const notYet = `![].concat(cribl_pipe || []).includes(${quote(pipeline.id)})`;
+      return {
+        filter: `__packId==${quote(pipeline.pack)} && (${inner}) && ${notYet}`,
+        level: 2,
+        basis: 'stage',
+        fallback: outer ? { filter: outer, level: 1 } : undefined,
+      };
+    }
+    if (outer && inner) {
+      const filter = outer === 'true' ? inner : inner === 'true' ? outer : `(${outer}) && (${inner})`;
+      return { filter, level: 1, basis: 'route' };
+    }
+    return ctx && depth < 2 ? chainedPlan(pipeline, groupRoutes, inputs, ctx, depth, inner) : undefined;
   }
 
   const routed = into(pipeline.id);
-  if (routed) return { filter: routed, level: 1 };
+  if (routed) return { filter: routed, level: 1, basis: 'route' };
   // A pre-processing pipeline sees events before routing, so they have to be tapped at the Source.
   const pre = anyOf(live.filter((i) => i.pipeline === pipeline.id).map(fromInput));
-  return pre ? { filter: pre, level: 0 } : undefined;
+  if (pre) return { filter: pre, level: 0, basis: 'source' };
+  if (!ctx) return undefined;
+
+  // A Destination's post-processing pipeline: events on their way to that Destination, after the
+  // processing pipeline. They are picked out by the routes that send there.
+  const destinations = new Set(ctx.outputs.filter((o) => o.pipeline === pipeline.id).map((o) => o.id));
+  if (destinations.size) {
+    const names = groupRoutes
+      .filter((r) => !r.disabled && r.output && destinations.has(r.output))
+      .map((r) => r.name ?? r.id ?? '')
+      .filter(Boolean);
+    if (names.length) {
+      return {
+        // Capture filters may not declare anything, so no callbacks: one test per route name.
+        filter: [...new Set(names)].map((n) => `[].concat(cribl_route || []).includes(${quote(n)})`).join(' || '),
+        level: 2,
+        basis: 'destination',
+      };
+    }
+  }
+  return depth < 2 ? chainedPlan(pipeline, groupRoutes, inputs, ctx, depth) : undefined;
+}
+
+/**
+ * A plan for a pipeline that is run by a Chain function: capture the calling pipeline's events and
+ * run them through its functions up to the Chain. `keep` is the Pack route filter the events must
+ * also pass when the Chain targets a whole Pack.
+ */
+function chainedPlan(
+  pipeline: Pipeline,
+  groupRoutes: Route[],
+  inputs: Input[],
+  ctx: PlanContext,
+  depth: number,
+  keep?: string,
+): CapturePlan | undefined {
+  const callers: { parent: Pipeline; cut: number }[] = [];
+  for (const parent of ctx.pipelines) {
+    if (parent.key === pipeline.key) continue;
+    (parent.conf.functions ?? []).forEach((fn, cut) => {
+      if (fn.id !== 'chain' || !isActive(fn, parent)) return;
+      const target = String(fn.conf?.processor ?? '');
+      // A bare name is a pipeline beside the caller; `pack:<id>` hands the event to a Pack's routes.
+      const direct = target === pipeline.id && parent.pack === pipeline.pack;
+      const viaPack = !!pipeline.pack && target === `pack:${pipeline.pack}` && keep !== undefined;
+      if (direct || viaPack) callers.push({ parent, cut });
+    });
+  }
+  callers.sort((a, b) => (ctx.traffic?.[b.parent.key]?.inEvents ?? 0) - (ctx.traffic?.[a.parent.key]?.inEvents ?? 0));
+  for (const { parent, cut } of callers) {
+    const plan = capturePlanFor(
+      parent,
+      groupRoutes,
+      inputs,
+      parent.pack ? (ctx.packRoutes[parent.pack] ?? []) : [],
+      ctx,
+      depth + 1,
+    );
+    // One hop only: a caller that is itself chained would need its own caller's events first.
+    if (!plan || plan.through) continue;
+    const functions = (parent.conf.functions ?? []).slice(0, cut);
+    const viaPack = String(parent.conf.functions![cut].conf?.processor ?? '').startsWith('pack:');
+    if (viaPack && keep && keep !== 'true') functions.push({ id: 'drop', filter: `!(${keep})`, conf: {} });
+    return {
+      ...plan,
+      basis: 'chain',
+      through: {
+        id: parent.id,
+        pack: parent.pack,
+        label: `${parent.pack ? `${parent.pack} / ` : ''}${parent.id}, up to function ${cut + 1}`,
+        conf: { ...parent.conf, functions },
+      },
+    };
+  }
+  return undefined;
 }

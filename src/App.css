@@ -353,70 +353,11 @@ body {
   gap: token('spacing.sm');
 }
 
-/* ---------- Recommendations ---------- */
-
-.rec-list {
-  display: flex;
-  flex-direction: column;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.rec-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: token('spacing.lg');
-  padding: token('spacing.md') 0;
-  border-block-end: token('border.default');
-}
-
-.rec-row:last-child {
-  border-block-end: none;
-}
-
-.rec-row-main {
-  display: flex;
-  flex-direction: column;
-  gap: token('spacing.xs');
-  min-width: 0;
-}
-
-/* ---------- Numbered steps ---------- */
-
-.step-list {
-  display: flex;
-  flex-direction: column;
-  gap: token('spacing.lg');
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.step-row {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: token('spacing.md');
-  align-items: start;
-}
-
-.step-body {
-  display: flex;
-  flex-direction: column;
-  gap: token('spacing.xs');
-}
-
 /* A value with a proportional bar beside it, inside a table cell. */
 .share-cell {
   min-width: 120px;
 }
 
-.summary-line {
-  display: flex;
-  flex-direction: column;
-  gap: token('spacing.xs');
-}
 
 /* A pipeline name with its Pack underneath, inside a table cell. */
 .name-cell {

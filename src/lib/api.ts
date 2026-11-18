@@ -172,7 +172,7 @@ export async function listInputs(groupId: string): Promise<Input[]> {
 /** The group's Destinations, read for their type (to recognize ones that discard events). */
 export async function listOutputs(groupId: string): Promise<Output[]> {
   const { items } = await getJson<Items<Output>>(`/m/${enc(groupId)}/system/outputs`);
-  return items.map((o) => ({ id: o.id, type: o.type }));
+  return items.map((o) => ({ id: o.id, type: o.type, pipeline: o.pipeline }));
 }
 
 const groupWhere = (groupId: string) => `__worker_group == '${groupId.replace(/['\\]/g, '\\$&')}'`;
@@ -252,7 +252,7 @@ export const CAPTURE_MAX_EVENTS = 1000;
 export async function captureEvents(
   groupId: string,
   filter: string,
-  level: 0 | 1,
+  level: 0 | 1 | 2,
   signal?: AbortSignal,
 ): Promise<Record<string, unknown>[]> {
   const res = await request(`/m/${enc(groupId)}/system/capture`, {

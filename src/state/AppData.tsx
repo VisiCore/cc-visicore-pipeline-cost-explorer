@@ -421,6 +421,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
   const { pipelineRows, functionRows, profiledCount, recommendations } = useMemo(() => {
     const fates = computeFates(pipelines, routes, inputs, outputs, routeTraffic, packRoutes);
     const current: Record<string, PipelineProfile | undefined> = {};
+    const planContext = { pipelines, outputs, packRoutes, traffic };
     const pRows: PipelineRow[] = [];
     const fRows: FunctionRow[] = [];
     let profiled = 0;
@@ -537,8 +538,8 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
             ? ((t.inEvents * (profile.totalMs / profile.events)) / 1000) * fates[p.key].discardedShare
             : undefined,
         capture: p.pack
-          ? packRoutes[p.pack] && capturePlanFor(p, routes, inputs, packRoutes[p.pack])
-          : capturePlanFor(p, routes, inputs),
+          ? packRoutes[p.pack] && capturePlanFor(p, routes, inputs, packRoutes[p.pack], planContext)
+          : capturePlanFor(p, routes, inputs, [], planContext),
       });
     }
     return {
